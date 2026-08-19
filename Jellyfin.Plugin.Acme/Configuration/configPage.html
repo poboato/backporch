@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>ACME Certificates</title>
+</head>
+<body>
+<div id="AcmeConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+    <div data-role="content">
+        <div class="content-primary">
+
+            <div class="verticalSection">
+                <div class="sectionTitleContainer flex align-items-center">
+                    <h2 class="sectionTitle">ACME Certificates</h2>
+                </div>
+                <p class="fieldDescription">
+                    Obtains a Let's Encrypt certificate for a domain you own, using the DNS-01
+                    challenge. Nothing needs to be reachable from the internet to issue the
+                    certificate &mdash; only to use it.
+                </p>
+            </div>
+
+            <div class="verticalSection">
+                <div id="acmeStatus" class="fieldDescription" style="padding: 1em 0;">Loading status&hellip;</div>
+            </div>
+
+            <form id="AcmeConfigForm">
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="Enabled" />
+                        <span>Enable certificate management</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                        Leave off until the settings below are filled in.
+                    </div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="UseStaging" />
+                        <span>Use the staging certificate authority</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">
+                        Strongly recommended for the first run. Staging certificates are not
+                        trusted by browsers, but the rate limits are far more forgiving while
+                        you are getting the configuration right.
+                    </div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="Domain">Domain</label>
+                    <input is="emby-input" type="text" id="Domain" placeholder="media.example.com" />
+                    <div class="fieldDescription">The exact hostname you will use to reach this server.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="AccountEmail">Contact email</label>
+                    <input is="emby-input" type="email" id="AccountEmail" />
+                    <div class="fieldDescription">Used by the certificate authority for expiry warnings only.</div>
+                </div>
+
+                <div class="selectContainer">
+                    <label class="selectLabel" for="DnsProvider">DNS provider</label>
+                    <select is="emby-select" id="DnsProvider" class="emby-select-withcolor emby-select">
+                        <option value="0">None</option>
+                        <option value="1">Cloudflare</option>
+                    </select>
+                    <div class="fieldDescription">Where the DNS zone for this domain is hosted.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="DnsApiToken">DNS API token</label>
+                    <input is="emby-input" type="password" id="DnsApiToken" autocomplete="off" />
+                    <div class="fieldDescription">
+                        Scope this token as tightly as your provider allows. For Cloudflare that is
+                        <strong>Zone &rarr; DNS &rarr; Edit</strong>, restricted to this one zone. The token is
+                        stored on this server and is never written to the logs.
+                    </div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="CertificatePath">Certificate file path</label>
+                    <input is="emby-input" type="text" id="CertificatePath" placeholder="/config/ssl/jellyfin.pfx" />
+                    <div class="fieldDescription">
+                        Where to write the certificate. Set the same path under
+                        Networking &rarr; Certificate path, then restart the server so it is picked up.
+                    </div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="RenewDaysBeforeExpiry">Renew this many days before expiry</label>
+                    <input is="emby-input" type="number" id="RenewDaysBeforeExpiry" min="1" max="60" />
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="DnsPropagationSeconds">Wait for DNS propagation (seconds)</label>
+                    <input is="emby-input" type="number" id="DnsPropagationSeconds" min="10" max="600" />
+                    <div class="fieldDescription">
+                        How long to wait after publishing the challenge record before asking the
+                        authority to check it. Increase this if validation times out.
+                    </div>
+                </div>
+
+                <div>
+                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                        <span>Save</span>
+                    </button>
+                    <button is="emby-button" type="button" id="RequestNow" class="raised block emby-button">
+                        <span>Request a certificate now</span>
+                    </button>
+                </div>
+
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (function () {
+            var pluginId = 'ec59d7bc-0644-4bfe-a924-b6ec7b88c1fb';
+            var page = document.querySelector('#AcmeConfigPage');
+
+            function renderStatus(status) {
+                var target = page.querySelector('#acmeStatus');
+                var lines = [];
+
+                if (status.CertificateExpiryUtc) {
+                    var expiry = new Date(status.CertificateExpiryUtc);
+                    var days = Math.round((expiry - new Date()) / 86400000);
+                    lines.push('Certificate expires ' + expiry.toDateString() + ' (' + days + ' days).');
+                } else {
+                    lines.push('No certificate has been issued yet.');
+                }
+
+                if (status.UsingStaging) {
+                    lines.push('Using the staging authority — this certificate is not trusted by browsers.');
+                }
+
+                lines.push('Last attempt: ' + (status.LastResult || 'never run'));
+                target.textContent = lines.join(' ');
+            }
+
+            function loadStatus() {
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('Acme/Status'),
+                    dataType: 'json'
+                }).then(renderStatus);
+            }
+
+            page.addEventListener('pageshow', function () {
+                Dashboard.showLoadingMsg();
+
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    page.querySelector('#Enabled').checked = config.Enabled;
+                    page.querySelector('#UseStaging').checked = config.UseStaging;
+                    page.querySelector('#Domain').value = config.Domain || '';
+                    page.querySelector('#AccountEmail').value = config.AccountEmail || '';
+                    page.querySelector('#DnsProvider').value = config.DnsProvider || 0;
+                    page.querySelector('#DnsApiToken').value = config.DnsApiToken || '';
+                    page.querySelector('#CertificatePath').value = config.CertificatePath || '';
+                    page.querySelector('#RenewDaysBeforeExpiry').value = config.RenewDaysBeforeExpiry || 30;
+                    page.querySelector('#DnsPropagationSeconds').value = config.DnsPropagationSeconds || 60;
+
+                    Dashboard.hideLoadingMsg();
+                    loadStatus();
+                });
+            });
+
+            page.querySelector('#AcmeConfigForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                Dashboard.showLoadingMsg();
+
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    config.Enabled = page.querySelector('#Enabled').checked;
+                    config.UseStaging = page.querySelector('#UseStaging').checked;
+                    config.Domain = page.querySelector('#Domain').value.trim();
+                    config.AccountEmail = page.querySelector('#AccountEmail').value.trim();
+                    config.DnsProvider = parseInt(page.querySelector('#DnsProvider').value, 10);
+                    config.DnsApiToken = page.querySelector('#DnsApiToken').value;
+                    config.CertificatePath = page.querySelector('#CertificatePath').value.trim();
+                    config.RenewDaysBeforeExpiry = parseInt(page.querySelector('#RenewDaysBeforeExpiry').value, 10);
+                    config.DnsPropagationSeconds = parseInt(page.querySelector('#DnsPropagationSeconds').value, 10);
+
+                    ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    });
+                });
+
+                return false;
+            });
+
+            page.querySelector('#RequestNow').addEventListener('click', function () {
+                Dashboard.showLoadingMsg();
+                page.querySelector('#acmeStatus').textContent =
+                    'Requesting a certificate. This can take a couple of minutes while DNS propagates.';
+
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('Acme/Request'),
+                    dataType: 'json'
+                }).then(function (status) {
+                    Dashboard.hideLoadingMsg();
+                    renderStatus(status);
+                }, function () {
+                    Dashboard.hideLoadingMsg();
+                    page.querySelector('#acmeStatus').textContent =
+                        'The request failed. Check the server log for details.';
+                });
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>
