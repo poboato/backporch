@@ -4,11 +4,11 @@ using System.Security.Cryptography.X509Certificates;
 using Certes;
 using Certes.Acme;
 using Certes.Acme.Resource;
-using Jellyfin.Plugin.Acme.Configuration;
-using Jellyfin.Plugin.Acme.Dns;
+using Jellyfin.Plugin.Backporch.Configuration;
+using Jellyfin.Plugin.Backporch.Dns;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.Acme.Acme;
+namespace Jellyfin.Plugin.Backporch.Acme;
 
 /// <summary>
 /// Requests and renews certificates over ACME using the DNS-01 challenge.

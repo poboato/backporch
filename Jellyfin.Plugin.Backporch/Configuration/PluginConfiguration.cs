@@ -1,6 +1,6 @@
 using MediaBrowser.Model.Plugins;
 
-namespace Jellyfin.Plugin.Acme.Configuration;
+namespace Jellyfin.Plugin.Backporch.Configuration;
 
 /// <summary>
 /// Which DNS provider hosts the zone for the configured domain.

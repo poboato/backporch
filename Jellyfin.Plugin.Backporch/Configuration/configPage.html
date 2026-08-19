@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <title>ACME Certificates</title>
+    <title>Backporch</title>
 </head>
 <body>
 <div id="AcmeConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
@@ -10,7 +10,7 @@
 
             <div class="verticalSection">
                 <div class="sectionTitleContainer flex align-items-center">
-                    <h2 class="sectionTitle">ACME Certificates</h2>
+                    <h2 class="sectionTitle">Backporch</h2>
                 </div>
                 <p class="fieldDescription">
                     Obtains a Let's Encrypt certificate for a domain you own, using the DNS-01
@@ -142,7 +142,7 @@
             function loadStatus() {
                 ApiClient.ajax({
                     type: 'GET',
-                    url: ApiClient.getUrl('Acme/Status'),
+                    url: ApiClient.getUrl('Backporch/Status'),
                     dataType: 'json'
                 }).then(renderStatus);
             }
@@ -196,7 +196,7 @@
 
                 ApiClient.ajax({
                     type: 'POST',
-                    url: ApiClient.getUrl('Acme/Request'),
+                    url: ApiClient.getUrl('Backporch/Request'),
                     dataType: 'json'
                 }).then(function (status) {
                     Dashboard.hideLoadingMsg();

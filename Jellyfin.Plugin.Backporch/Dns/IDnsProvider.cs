@@ -1,4 +1,4 @@
-namespace Jellyfin.Plugin.Acme.Dns;
+namespace Jellyfin.Plugin.Backporch.Dns;
 
 /// <summary>
 /// Writes and removes the TXT record used to answer an ACME DNS-01 challenge.

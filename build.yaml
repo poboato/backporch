@@ -1,7 +1,7 @@
 ---
 # Jellyfin plugin build manifest, consumed by the jprm packaging tool
 # (https://github.com/oddstr13/jellyfin-plugin-repository-manager).
-name: "ACME Certificates"
+name: "Backporch"
 guid: "ec59d7bc-0644-4bfe-a924-b6ec7b88c1fb"
 version: "0.1.0.0"
 targetAbi: "10.11.0.0"
@@ -14,7 +14,7 @@ description: >
   certificate every device already trusts. No inbound port is needed to issue.
 category: "General"
 artifacts:
-  - "Jellyfin.Plugin.Acme.dll"
+  - "Jellyfin.Plugin.Backporch.dll"
   - "Certes.dll"
   - "BouncyCastle.Crypto.dll"
 changelog: |

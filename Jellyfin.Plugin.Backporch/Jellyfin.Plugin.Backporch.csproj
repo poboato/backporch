@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <RootNamespace>Jellyfin.Plugin.Acme</RootNamespace>
+    <RootNamespace>Jellyfin.Plugin.Backporch</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>

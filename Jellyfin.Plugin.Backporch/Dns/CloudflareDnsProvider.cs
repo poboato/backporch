@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.Acme.Dns;
+namespace Jellyfin.Plugin.Backporch.Dns;
 
 /// <summary>
 /// DNS-01 provider backed by the Cloudflare v4 API.

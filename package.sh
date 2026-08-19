@@ -9,16 +9,16 @@ cd "$(dirname "$0")"
 
 DOTNET="${DOTNET:-dotnet}"
 VERSION="0.1.0.0"
-NAME="acme-certificates"
+NAME="backporch"
 OUT="dist"
 STAGE="$OUT/stage"
 
 rm -rf "$OUT"
 mkdir -p "$STAGE"
 
-"$DOTNET" publish Jellyfin.Plugin.Acme/Jellyfin.Plugin.Acme.csproj -c Release -o "$OUT/publish"
+"$DOTNET" publish Jellyfin.Plugin.Backporch/Jellyfin.Plugin.Backporch.csproj -c Release -o "$OUT/publish"
 
-cp "$OUT/publish/Jellyfin.Plugin.Acme.dll" \
+cp "$OUT/publish/Jellyfin.Plugin.Backporch.dll" \
    "$OUT/publish/Certes.dll" \
    "$OUT/publish/BouncyCastle.Crypto.dll" \
    "$STAGE/"

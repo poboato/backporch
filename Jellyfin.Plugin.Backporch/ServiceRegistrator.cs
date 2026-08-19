@@ -1,9 +1,9 @@
-using Jellyfin.Plugin.Acme.Acme;
+using Jellyfin.Plugin.Backporch.Acme;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Jellyfin.Plugin.Acme;
+namespace Jellyfin.Plugin.Backporch;
 
 /// <summary>
 /// Registers the plugin's services with Jellyfin's container.

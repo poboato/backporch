@@ -1,8 +1,8 @@
-using Jellyfin.Plugin.Acme.Acme;
+using Jellyfin.Plugin.Backporch.Acme;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.Acme.Tasks;
+namespace Jellyfin.Plugin.Backporch.Tasks;
 
 /// <summary>
 /// Daily check that renews the certificate once it is inside the renewal window.
@@ -27,7 +27,7 @@ public class RenewCertificateTask : IScheduledTask
     public string Name => "Renew TLS certificate";
 
     /// <inheritdoc />
-    public string Key => "AcmeRenewCertificate";
+    public string Key => "BackporchRenewCertificate";
 
     /// <inheritdoc />
     public string Description =>

@@ -1,6 +1,10 @@
-# Jellyfin ACME Plugin
+# Backporch
 
 Automatic, publicly trusted TLS certificates for a self-hosted Jellyfin server.
+
+The name: on an analog TV signal, the *back porch* is the quiet interval on
+every scanline where the reference burst lives — the part of the broadcast
+that keeps the picture honest. It is also the door your own household uses.
 
 Bring your own domain; the plugin obtains and renews a Let's Encrypt
 certificate via the **DNS-01** challenge and writes a PKCS#12 bundle that
@@ -51,8 +55,8 @@ the one thing only you can own, the domain.
 ## Install (manual, until a repository is published)
 
 1. Run `./package.sh` (or grab a release zip).
-2. Unzip into `config/plugins/ACME Certificates_0.1.0.0/` on the server.
-3. Restart Jellyfin, then open **Dashboard → Plugins → ACME Certificates**.
+2. Unzip into `config/plugins/Backporch_0.1.0.0/` on the server.
+3. Restart Jellyfin, then open **Dashboard → Plugins → Backporch**.
 4. Fill in domain, email, provider, token, and a certificate path. Leave
    **staging** on. Press **Request a certificate now**.
 5. When staging succeeds, switch staging off, request again, then set
@@ -62,7 +66,7 @@ the one thing only you can own, the domain.
 
 Against a disposable `jellyfin/jellyfin:10.11.11` container:
 
-- Assembly loads cleanly (`Loaded plugin: ACME Certificates 0.1.0.0`), with
+- Assembly loads cleanly (`Loaded plugin: Backporch 0.1.0.0`), with
   Certes and BouncyCastle alongside it.
 - The admin API registers (`/Acme/Status`: 401 unauthenticated, 200 as admin)
   and the elevation policy holds.
