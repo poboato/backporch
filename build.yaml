@@ -1,0 +1,22 @@
+---
+# Jellyfin plugin build manifest, consumed by the jprm packaging tool
+# (https://github.com/oddstr13/jellyfin-plugin-repository-manager).
+name: "ACME Certificates"
+guid: "ec59d7bc-0644-4bfe-a924-b6ec7b88c1fb"
+version: "0.1.0.0"
+targetAbi: "10.11.0.0"
+framework: "net9.0"
+owner: "poboato"
+overview: "Automatic trusted TLS certificates for a self-hosted server."
+description: >
+  Automatically obtains and renews a Let's Encrypt certificate for your own
+  domain via the DNS-01 challenge, so remote access is encrypted with a
+  certificate every device already trusts. No inbound port is needed to issue.
+category: "General"
+artifacts:
+  - "Jellyfin.Plugin.Acme.dll"
+  - "Certes.dll"
+  - "BouncyCastle.Crypto.dll"
+changelog: |
+  Initial release: DNS-01 issuance via Cloudflare, staging-first defaults,
+  daily renewal task, admin-only API and configuration page.
