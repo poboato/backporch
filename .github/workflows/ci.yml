@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Build
+        run: dotnet build Jellyfin.Plugin.Backporch/Jellyfin.Plugin.Backporch.csproj -c Release
+
+      - name: Unit tests
+        run: dotnet test Jellyfin.Plugin.Backporch.Tests/Jellyfin.Plugin.Backporch.Tests.csproj -c Release --filter "Category!=Integration"
+
+      - name: Package
+        run: DOTNET=dotnet ./package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backporch
+          path: dist/backporch_*.zip
+
+  issuance-against-pebble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Start Pebble test CA
+        run: |
+          docker network create pebble
+          docker run -d --name challtestsrv --network pebble -p 8055:8055 \
+            ghcr.io/letsencrypt/pebble-challtestsrv:latest -defaultIPv4 "" -defaultIPv6 ""
+          docker run -d --name pebble --network pebble -p 14000:14000 \
+            ghcr.io/letsencrypt/pebble:latest -dnsserver challtestsrv:8053
+          for i in $(seq 1 30); do
+            curl -sk https://localhost:14000/dir >/dev/null && break
+            sleep 1
+          done
+
+      - name: End-to-end issuance
+        env:
+          BACKPORCH_PEBBLE_DIR: https://localhost:14000/dir
+          BACKPORCH_CHALLTESTSRV: http://localhost:8055
+        run: dotnet test Jellyfin.Plugin.Backporch.Tests/Jellyfin.Plugin.Backporch.Tests.csproj -c Release --filter "Category=Integration"

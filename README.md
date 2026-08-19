@@ -75,8 +75,15 @@ Against a disposable `jellyfin/jellyfin:10.11.11` container:
 - The issuance service executes end-to-end up to its validation gate and
   persists attempt state.
 
-Not yet exercised: a real ACME order against staging (needs a domain), and the
-Cloudflare API calls against a live zone.
+And against Let's Encrypt's **Pebble** test CA (real ACME, no real DNS):
+
+- Full issuance end-to-end through the plugin's own code path: account
+  registration, order, DNS-01 challenge, validation, finalize, chain download,
+  and a PKCS#12 on disk with owner-only permissions that matches the hostname.
+  This runs in CI on every push.
+
+Not yet exercised: Let's Encrypt staging with a real domain, and the Cloudflare
+API against a live zone.
 
 ## Known limitations
 

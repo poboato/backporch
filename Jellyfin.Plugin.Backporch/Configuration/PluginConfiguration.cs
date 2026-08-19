@@ -54,6 +54,13 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool UseStaging { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets an ACME directory URL that overrides the Let's Encrypt
+    /// endpoints entirely. Advanced: for alternative CAs or a local test CA.
+    /// Leave empty to follow <see cref="UseStaging"/>.
+    /// </summary>
+    public string DirectoryUrl { get; set; } = string.Empty;
+
+    /// <summary>
     /// Gets or sets a value indicating whether the plugin may request or renew
     /// certificates. Off until explicitly enabled.
     /// </summary>

@@ -153,18 +153,40 @@ public sealed class AcmeService
         return message;
     }
 
-    private async Task<DateTime> IssueAsync(PluginConfiguration config, CancellationToken cancellationToken)
+    private Task<DateTime> IssueAsync(PluginConfiguration config, CancellationToken cancellationToken)
     {
-        var directory = config.UseStaging
-            ? WellKnownServers.LetsEncryptStagingV2
-            : WellKnownServers.LetsEncryptV2;
+        var directory = !string.IsNullOrWhiteSpace(config.DirectoryUrl)
+            ? new Uri(config.DirectoryUrl)
+            : config.UseStaging
+                ? WellKnownServers.LetsEncryptStagingV2
+                : WellKnownServers.LetsEncryptV2;
 
-        var acme = await GetOrCreateAccountAsync(config, directory, cancellationToken).ConfigureAwait(false);
+        return IssueCertificateAsync(config, CreateDnsProvider(config), directory, acmeHttpClient: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// The full issuance pipeline: account, order, DNS-01 challenge, finalize, write PFX.
+    /// Public and dependency-free of the Jellyfin runtime so integration tests can drive
+    /// it against a test CA.
+    /// </summary>
+    /// <param name="config">The configuration to issue for.</param>
+    /// <param name="dnsProvider">The DNS provider used to answer the challenge.</param>
+    /// <param name="directory">The ACME directory endpoint.</param>
+    /// <param name="acmeHttpClient">Optional HTTP client for ACME traffic (test CAs use self-signed TLS).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The UTC expiry of the issued certificate.</returns>
+    public async Task<DateTime> IssueCertificateAsync(
+        PluginConfiguration config,
+        IDnsProvider dnsProvider,
+        Uri directory,
+        HttpClient? acmeHttpClient,
+        CancellationToken cancellationToken)
+    {
+        var acme = await GetOrCreateAccountAsync(config, directory, acmeHttpClient, cancellationToken).ConfigureAwait(false);
 
         var order = await acme.NewOrder(new[] { config.Domain }).ConfigureAwait(false);
         var authorizations = await order.Authorizations().ConfigureAwait(false);
 
-        var dnsProvider = CreateDnsProvider(config);
         var placedRecords = new List<string>();
 
         try
@@ -196,7 +218,12 @@ public sealed class AcmeService
                 .ConfigureAwait(false);
 
             var password = EnsurePassword(config);
-            var pfx = chain.ToPfx(privateKey).Build(config.Domain, password);
+
+            // Assemble the PKCS#12 with .NET's own crypto from exactly the chain the CA
+            // returned. Certes' PfxBuilder resolves issuers against an embedded root
+            // store instead, which breaks on any root it doesn't know — test CAs today,
+            // a rotated production root tomorrow.
+            var pfx = BuildPfx(chain, privateKey, password);
 
             await WriteCertificateAsync(config.CertificatePath, pfx, cancellationToken).ConfigureAwait(false);
 
@@ -215,24 +242,39 @@ public sealed class AcmeService
     private async Task<IAcmeContext> GetOrCreateAccountAsync(
         PluginConfiguration config,
         Uri directory,
+        HttpClient? acmeHttpClient,
         CancellationToken cancellationToken)
     {
+        var http = acmeHttpClient is null ? null : new AcmeHttpClient(directory, acmeHttpClient);
+
         if (!string.IsNullOrWhiteSpace(config.AccountKeyPem))
         {
-            var existing = new AcmeContext(directory, KeyFactory.FromPem(config.AccountKeyPem));
+            var existing = new AcmeContext(directory, KeyFactory.FromPem(config.AccountKeyPem), http);
 
-            // Confirms the stored key still corresponds to a registered account.
-            await existing.Account().ConfigureAwait(false);
-            return existing;
+            try
+            {
+                // Confirms the stored key corresponds to an account registered at THIS CA.
+                await existing.Account().ConfigureAwait(false);
+                return existing;
+            }
+            catch (AcmeException)
+            {
+                // The key exists but this CA has never seen it — typical when switching
+                // from staging to production. Register the same key here rather than
+                // discarding it.
+                _logger.LogInformation("Registering the existing account key with {Directory}", directory);
+                await existing.NewAccount(config.AccountEmail, termsOfServiceAgreed: true).ConfigureAwait(false);
+                return existing;
+            }
         }
 
         _logger.LogInformation("Registering a new ACME account against {Directory}", directory);
 
-        var acme = new AcmeContext(directory);
+        var acme = new AcmeContext(directory, null, http);
         await acme.NewAccount(config.AccountEmail, termsOfServiceAgreed: true).ConfigureAwait(false);
 
         config.AccountKeyPem = acme.AccountKey.ToPem();
-        Plugin.Instance!.UpdateConfiguration(config);
+        Plugin.Instance?.UpdateConfiguration(config);
 
         cancellationToken.ThrowIfCancellationRequested();
         return acme;
@@ -280,12 +322,36 @@ public sealed class AcmeService
         _ => throw new InvalidOperationException("No supported DNS provider is configured.")
     };
 
+    /// <summary>
+    /// Builds a PKCS#12 bundle from the CA-provided chain: the leaf bound to its private
+    /// key, followed by the intermediates exactly as the CA served them. The root is
+    /// whatever the chain carries — no external trust store is consulted.
+    /// </summary>
+    private static byte[] BuildPfx(CertificateChain chain, IKey privateKey, string password)
+    {
+        var collection = new X509Certificate2Collection();
+
+        using var leaf = X509Certificate2.CreateFromPem(chain.Certificate.ToPem(), privateKey.ToPem());
+        collection.Add(leaf);
+
+        if (chain.Issuers is not null)
+        {
+            foreach (var issuer in chain.Issuers)
+            {
+                collection.Add(X509Certificate2.CreateFromPem(issuer.ToPem()));
+            }
+        }
+
+        return collection.Export(X509ContentType.Pfx, password)
+            ?? throw new InvalidOperationException("PKCS#12 export produced no data.");
+    }
+
     private static string EnsurePassword(PluginConfiguration config)
     {
         if (string.IsNullOrEmpty(config.CertificatePassword))
         {
             config.CertificatePassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-            Plugin.Instance!.UpdateConfiguration(config);
+            Plugin.Instance?.UpdateConfiguration(config);
         }
 
         return config.CertificatePassword;
