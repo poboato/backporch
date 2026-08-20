@@ -42,6 +42,9 @@ things — your domain and an email — and the page walks you through the rest:
 
 ## How it works
 
+(Design rationale — why each of these choices, and the failure each one guards
+against — is recorded in [docs/DESIGN.md](docs/DESIGN.md).)
+
 1. The plugin registers an ACME account (key generated locally, reused forever,
    valid on staging and production alike).
 2. For each issuance it answers the CA's ownership challenge. By default that
