@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Certes;
 using Certes.Acme;
@@ -21,49 +20,66 @@ public sealed class AcmeService
 {
     private static readonly TimeSpan _validationTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan _manualDnsTimeout = TimeSpan.FromMinutes(15);
 
     private readonly ILogger<AcmeService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IssuanceState _state;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AcmeService"/> class.
     /// </summary>
     /// <param name="logger">Logger.</param>
     /// <param name="httpClientFactory">Factory for provider HTTP clients.</param>
-    public AcmeService(ILogger<AcmeService> logger, IHttpClientFactory httpClientFactory)
+    /// <param name="state">Shared progress state polled by the configuration page.</param>
+    public AcmeService(ILogger<AcmeService> logger, IHttpClientFactory httpClientFactory, IssuanceState state)
     {
         _logger = logger;
         _httpClientFactory = httpClientFactory;
+        _state = state;
     }
 
     /// <summary>
     /// Issues a certificate if one is needed, or if <paramref name="force"/> is set.
+    /// Used by the renewal task; honours the configured CA as-is.
     /// </summary>
     /// <param name="force">Issue even when the current certificate is still healthy.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A human-readable description of what happened.</returns>
     public async Task<string> RunAsync(bool force, CancellationToken cancellationToken)
     {
-        var plugin = Plugin.Instance
-            ?? throw new InvalidOperationException("Plugin instance is not available.");
-        var config = plugin.Configuration;
-
-        var problem = Validate(config);
-        if (problem is not null)
+        if (!_state.TryBegin())
         {
-            return Record(plugin, problem);
+            return "An issuance is already running.";
         }
 
-        if (!force && !NeedsRenewal(config))
-        {
-            var days = (config.CertificateExpiryUtc!.Value - DateTime.UtcNow).TotalDays;
-            return string.Create(
-                CultureInfo.InvariantCulture,
-                $"No action needed — certificate is valid for another {days:F0} days.");
-        }
+        Plugin? plugin = null;
 
         try
         {
+            plugin = Plugin.Instance
+                ?? throw new InvalidOperationException("Plugin instance is not available.");
+            var config = plugin.Configuration;
+
+            ApplyDefaultCertificatePath(plugin, config);
+
+            var problem = Validate(config);
+            if (problem is not null)
+            {
+                _state.Finish(false, problem);
+                return Record(plugin, problem);
+            }
+
+            if (!force && !NeedsRenewal(config))
+            {
+                var days = (config.CertificateExpiryUtc!.Value - DateTime.UtcNow).TotalDays;
+                var healthy = string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"No action needed — certificate is valid for another {days:F0} days.");
+                _state.Finish(true, healthy);
+                return healthy;
+            }
+
             var expiry = await IssueAsync(config, cancellationToken).ConfigureAwait(false);
             config.CertificateExpiryUtc = expiry;
 
@@ -78,16 +94,112 @@ public sealed class AcmeService
                 message += " Staging certificate — not trusted by browsers.";
             }
 
+            _state.Finish(true, message);
             return Record(plugin, message);
         }
         catch (OperationCanceledException)
         {
+            _state.Finish(false, "Cancelled.");
             throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Certificate issuance failed");
-            return Record(plugin, "Failed — " + ex.Message);
+            var failure = "Failed — " + ex.Message;
+            _state.Finish(false, failure);
+            return plugin is null ? failure : Record(plugin, failure);
+        }
+    }
+
+    /// <summary>
+    /// The guided-setup path behind the page's one button: while the configuration is
+    /// unproven it first performs a staging dry run (discarded afterwards), then issues
+    /// the real certificate from production. The user never has to know staging exists.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A human-readable description of what happened.</returns>
+    public async Task<string> RunGuidedAsync(CancellationToken cancellationToken)
+    {
+        if (!_state.TryBegin())
+        {
+            return "An issuance is already running.";
+        }
+
+        Plugin? plugin = null;
+
+        try
+        {
+            plugin = Plugin.Instance
+                ?? throw new InvalidOperationException("Plugin instance is not available.");
+            var config = plugin.Configuration;
+
+            ApplyDefaultCertificatePath(plugin, config);
+
+            var problem = Validate(config);
+            if (problem is not null)
+            {
+                _state.Finish(false, problem);
+                return Record(plugin, problem);
+            }
+
+            if (config.UseStaging && string.IsNullOrWhiteSpace(config.DirectoryUrl))
+            {
+                _state.SetTestRun(true);
+                _state.Report(
+                    IssuancePhase.Starting,
+                    "Running a test issuance first, so mistakes cost nothing.");
+
+                var testConfig = CloneForTestRun(config);
+
+                try
+                {
+                    await IssueCertificateAsync(
+                        testConfig,
+                        CreateDnsProvider(testConfig),
+                        WellKnownServers.LetsEncryptStagingV2,
+                        acmeHttpClient: null,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (File.Exists(testConfig.CertificatePath))
+                    {
+                        File.Delete(testConfig.CertificatePath);
+                    }
+                }
+
+                // Keep the account the dry run registered, and mark the setup proven.
+                config.AccountKeyPem = testConfig.AccountKeyPem;
+                config.UseStaging = false;
+                plugin.UpdateConfiguration(config);
+
+                _state.SetTestRun(false);
+                _logger.LogInformation("Staging dry run succeeded; issuing the real certificate");
+            }
+
+            var expiry = await IssueAsync(config, cancellationToken).ConfigureAwait(false);
+            config.CertificateExpiryUtc = expiry;
+
+            var message = string.Format(
+                CultureInfo.InvariantCulture,
+                "Issued a certificate for {0}, valid until {1:yyyy-MM-dd}. Renewal is automatic.",
+                config.Domain,
+                expiry);
+
+            _state.Finish(true, message);
+            return Record(plugin, message);
+        }
+        catch (OperationCanceledException)
+        {
+            _state.Finish(false, "Cancelled.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Guided issuance failed");
+            var failure = "Failed — " + ex.Message;
+            _state.Finish(false, failure);
+            return plugin is null ? failure : Record(plugin, failure);
         }
     }
 
@@ -131,9 +243,14 @@ public sealed class AcmeService
             return "No contact email configured.";
         }
 
-        if (config.DnsProvider == DnsProviderKind.None || string.IsNullOrWhiteSpace(config.DnsApiToken))
+        if (config.DnsProvider == DnsProviderKind.None)
         {
-            return "No DNS provider configured.";
+            return "Choose how the DNS challenge record will be added.";
+        }
+
+        if (config.DnsProvider == DnsProviderKind.Cloudflare && string.IsNullOrWhiteSpace(config.DnsApiToken))
+        {
+            return "Cloudflare is selected but no API token is set.";
         }
 
         if (string.IsNullOrWhiteSpace(config.CertificatePath))
@@ -143,6 +260,30 @@ public sealed class AcmeService
 
         return null;
     }
+
+    private static void ApplyDefaultCertificatePath(Plugin plugin, PluginConfiguration config)
+    {
+        if (string.IsNullOrWhiteSpace(config.CertificatePath))
+        {
+            config.CertificatePath = plugin.DefaultCertificatePath;
+            plugin.UpdateConfiguration(config);
+        }
+    }
+
+    private static PluginConfiguration CloneForTestRun(PluginConfiguration config) => new()
+    {
+        Enabled = config.Enabled,
+        Domain = config.Domain,
+        AccountEmail = config.AccountEmail,
+        DnsProvider = config.DnsProvider,
+        DnsApiToken = config.DnsApiToken,
+        UseStaging = true,
+        DnsPropagationSeconds = config.DnsPropagationSeconds,
+        RenewDaysBeforeExpiry = config.RenewDaysBeforeExpiry,
+        CertificatePath = config.CertificatePath + ".test",
+        CertificatePassword = config.CertificatePassword,
+        AccountKeyPem = config.AccountKeyPem
+    };
 
     private string Record(Plugin plugin, string message)
     {
@@ -182,8 +323,10 @@ public sealed class AcmeService
         HttpClient? acmeHttpClient,
         CancellationToken cancellationToken)
     {
+        _state.Report(IssuancePhase.Account, "Checking the certificate authority account…");
         var acme = await GetOrCreateAccountAsync(config, directory, acmeHttpClient, cancellationToken).ConfigureAwait(false);
 
+        _state.Report(IssuancePhase.PublishingDns, "Creating the certificate order…");
         var order = await acme.NewOrder(new[] { config.Domain }).ConfigureAwait(false);
         var authorizations = await order.Authorizations().ConfigureAwait(false);
 
@@ -199,6 +342,9 @@ public sealed class AcmeService
                 var resource = await authorization.Resource().ConfigureAwait(false);
                 var recordName = "_acme-challenge." + resource.Identifier.Value.TrimStart('*', '.');
 
+                // The manual provider flips the phase to AwaitingDnsRecord while it
+                // waits for the user; API providers pass straight through.
+                _state.Report(IssuancePhase.PublishingDns, "Publishing the DNS challenge record…");
                 var handle = await dnsProvider
                     .CreateTxtRecordAsync(recordName, digest, cancellationToken).ConfigureAwait(false);
                 placedRecords.Add(handle);
@@ -206,28 +352,41 @@ public sealed class AcmeService
                 _logger.LogInformation(
                     "Waiting {Seconds}s for DNS propagation before asking the CA to validate",
                     config.DnsPropagationSeconds);
-                await Task.Delay(TimeSpan.FromSeconds(config.DnsPropagationSeconds), cancellationToken)
-                    .ConfigureAwait(false);
 
+                var remaining = TimeSpan.FromSeconds(config.DnsPropagationSeconds);
+                while (remaining > TimeSpan.Zero)
+                {
+                    _state.Report(
+                        IssuancePhase.Propagating,
+                        string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"Waiting for DNS to propagate — about {(int)remaining.TotalSeconds}s left…"));
+
+                    var step = remaining > _pollInterval ? _pollInterval : remaining;
+                    await Task.Delay(step, cancellationToken).ConfigureAwait(false);
+                    remaining -= step;
+                }
+
+                _state.Report(IssuancePhase.Validating, "The certificate authority is checking the record…");
                 await challenge.Validate().ConfigureAwait(false);
                 await WaitForValidationAsync(authorization, cancellationToken).ConfigureAwait(false);
             }
 
+            _state.Report(IssuancePhase.Finalizing, "Downloading the certificate…");
             var privateKey = KeyFactory.NewKey(KeyAlgorithm.ES256);
             var chain = await order.Generate(new CsrInfo { CommonName = config.Domain }, privateKey)
                 .ConfigureAwait(false);
-
-            var password = EnsurePassword(config);
 
             // Assemble the PKCS#12 with .NET's own crypto from exactly the chain the CA
             // returned. Certes' PfxBuilder resolves issuers against an embedded root
             // store instead, which breaks on any root it doesn't know — test CAs today,
             // a rotated production root tomorrow.
-            var pfx = BuildPfx(chain, privateKey, password);
+            var pfx = BuildPfx(chain, privateKey, config.CertificatePassword);
 
+            _state.Report(IssuancePhase.WritingCertificate, "Writing the certificate to disk…");
             await WriteCertificateAsync(config.CertificatePath, pfx, cancellationToken).ConfigureAwait(false);
 
-            using var issued = X509CertificateLoader.LoadPkcs12(pfx, password);
+            using var issued = X509CertificateLoader.LoadPkcs12(pfx, config.CertificatePassword);
             return issued.NotAfter.ToUniversalTime();
         }
         finally
@@ -274,7 +433,13 @@ public sealed class AcmeService
         await acme.NewAccount(config.AccountEmail, termsOfServiceAgreed: true).ConfigureAwait(false);
 
         config.AccountKeyPem = acme.AccountKey.ToPem();
-        Plugin.Instance?.UpdateConfiguration(config);
+
+        // Persist only when we hold the live configuration — a dry-run clone must never
+        // replace the real one (UpdateConfiguration swaps the whole object in).
+        if (Plugin.Instance is { } plugin && ReferenceEquals(plugin.Configuration, config))
+        {
+            plugin.UpdateConfiguration(config);
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         return acme;
@@ -319,6 +484,7 @@ public sealed class AcmeService
             _httpClientFactory.CreateClient(nameof(CloudflareDnsProvider)),
             config.DnsApiToken,
             _logger),
+        DnsProviderKind.Manual => new ManualDnsProvider(_state, _manualDnsTimeout),
         _ => throw new InvalidOperationException("No supported DNS provider is configured.")
     };
 
@@ -344,17 +510,6 @@ public sealed class AcmeService
 
         return collection.Export(X509ContentType.Pfx, password)
             ?? throw new InvalidOperationException("PKCS#12 export produced no data.");
-    }
-
-    private static string EnsurePassword(PluginConfiguration config)
-    {
-        if (string.IsNullOrEmpty(config.CertificatePassword))
-        {
-            config.CertificatePassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-            Plugin.Instance?.UpdateConfiguration(config);
-        }
-
-        return config.CertificatePassword;
     }
 
     /// <summary>

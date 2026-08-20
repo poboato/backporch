@@ -14,6 +14,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
         serviceCollection.AddHttpClient();
+        serviceCollection.AddSingleton<IssuanceState>();
         serviceCollection.AddSingleton<AcmeService>();
     }
 }

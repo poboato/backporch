@@ -17,6 +17,7 @@ public sealed class CloudflareDnsProvider : IDnsProvider
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private string? _zoneId;
+    private string? _zoneName;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CloudflareDnsProvider"/> class.
@@ -82,6 +83,19 @@ public sealed class CloudflareDnsProvider : IDnsProvider
     }
 
     /// <summary>
+    /// Confirms the token can see the zone that owns <paramref name="domain"/>, without
+    /// writing anything. Used by the configuration page's preflight check.
+    /// </summary>
+    /// <param name="domain">The domain a certificate will be requested for.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The name of the matched zone.</returns>
+    public async Task<string> VerifyAccessAsync(string domain, CancellationToken cancellationToken)
+    {
+        await ResolveZoneIdAsync(domain, cancellationToken).ConfigureAwait(false);
+        return _zoneName!;
+    }
+
+    /// <summary>
     /// Finds the zone that owns a record by walking the name from most to least specific,
     /// so both apex and delegated-subdomain zones resolve correctly.
     /// </summary>
@@ -109,6 +123,7 @@ public sealed class CloudflareDnsProvider : IDnsProvider
                 _zoneId = result[0].GetProperty("id").GetString();
                 if (_zoneId is not null)
                 {
+                    _zoneName = candidate;
                     _logger.LogInformation("Matched Cloudflare zone {Zone}", candidate);
                     return _zoneId;
                 }

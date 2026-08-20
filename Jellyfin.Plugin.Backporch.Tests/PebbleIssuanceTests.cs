@@ -48,7 +48,7 @@ public class PebbleIssuanceTests
         };
         using var acmeHttp = new HttpClient(insecureHandler);
 
-        var service = new AcmeService(NullLogger<AcmeService>.Instance, new SingleClientFactory());
+        var service = new AcmeService(NullLogger<AcmeService>.Instance, new SingleClientFactory(), new IssuanceState());
         var dns = new ChallTestSrvDnsProvider(new HttpClient(), challSrv);
 
         try

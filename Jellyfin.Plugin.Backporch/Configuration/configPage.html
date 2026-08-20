@@ -4,207 +4,608 @@
     <title>Backporch</title>
 </head>
 <body>
-<div id="AcmeConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+<div id="BackporchConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
     <div data-role="content">
         <div class="content-primary">
 
+            <style>
+                #BackporchConfigPage .bp-step {
+                    border: 1px solid rgba(128, 128, 128, 0.35);
+                    border-radius: 8px;
+                    padding: 1em 1.2em;
+                    margin: 0 0 1em 0;
+                }
+                #BackporchConfigPage .bp-step-head {
+                    display: flex;
+                    align-items: center;
+                    gap: 0.7em;
+                    font-size: 1.08em;
+                    font-weight: 600;
+                }
+                #BackporchConfigPage .bp-dot {
+                    flex: none;
+                    width: 1.7em;
+                    height: 1.7em;
+                    border-radius: 50%;
+                    border: 2px solid rgba(128, 128, 128, 0.6);
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 0.9em;
+                }
+                #BackporchConfigPage .bp-step.bp-done .bp-dot {
+                    border-color: #4caf50;
+                    background: #4caf50;
+                    color: #fff;
+                }
+                #BackporchConfigPage .bp-step.bp-active .bp-dot {
+                    border-color: #00a4dc;
+                    color: #00a4dc;
+                }
+                #BackporchConfigPage .bp-step-body { margin-top: 0.8em; }
+                #BackporchConfigPage .bp-step.bp-locked { opacity: 0.45; }
+                #BackporchConfigPage .bp-step.bp-locked .bp-step-body { display: none; }
+                #BackporchConfigPage .bp-record {
+                    display: grid;
+                    grid-template-columns: auto 1fr auto;
+                    gap: 0.4em 0.8em;
+                    align-items: center;
+                    font-family: monospace;
+                    background: rgba(128, 128, 128, 0.12);
+                    border-radius: 6px;
+                    padding: 0.7em 0.9em;
+                    margin: 0.6em 0;
+                    overflow-x: auto;
+                }
+                #BackporchConfigPage .bp-record .bp-k {
+                    font-family: inherit;
+                    opacity: 0.7;
+                    font-size: 0.85em;
+                }
+                #BackporchConfigPage .bp-record .bp-v { word-break: break-all; }
+                #BackporchConfigPage .bp-copy {
+                    font-size: 0.8em;
+                    padding: 0.25em 0.8em;
+                    cursor: pointer;
+                }
+                #BackporchConfigPage .bp-ok { color: #4caf50; }
+                #BackporchConfigPage .bp-warn { color: #e0a030; }
+                #BackporchConfigPage .bp-err { color: #e05050; }
+                #BackporchConfigPage .bp-progress {
+                    display: flex;
+                    align-items: center;
+                    gap: 0.7em;
+                    margin: 0.7em 0;
+                }
+                #BackporchConfigPage .bp-spinner {
+                    flex: none;
+                    width: 1.1em;
+                    height: 1.1em;
+                    border: 2px solid rgba(128, 128, 128, 0.35);
+                    border-top-color: #00a4dc;
+                    border-radius: 50%;
+                    animation: bp-spin 0.9s linear infinite;
+                }
+                @keyframes bp-spin { to { transform: rotate(360deg); } }
+                #BackporchConfigPage .bp-banner {
+                    border-radius: 8px;
+                    padding: 0.9em 1.2em;
+                    margin: 0 0 1.2em 0;
+                    background: rgba(76, 175, 80, 0.12);
+                    border: 1px solid rgba(76, 175, 80, 0.5);
+                }
+                #BackporchConfigPage details.bp-advanced { margin-top: 1.5em; }
+                #BackporchConfigPage details.bp-advanced > summary { cursor: pointer; opacity: 0.8; }
+            </style>
+
             <div class="verticalSection">
-                <div class="sectionTitleContainer flex align-items-center">
-                    <h2 class="sectionTitle">Backporch</h2>
-                </div>
+                <h2 class="sectionTitle">Backporch</h2>
                 <p class="fieldDescription">
-                    Obtains a Let's Encrypt certificate for a domain you own, using the DNS-01
-                    challenge. Nothing needs to be reachable from the internet to issue the
-                    certificate &mdash; only to use it.
+                    Your own address for this server, with a certificate every device already
+                    trusts. You need a domain you own — everything else happens here.
                 </p>
             </div>
 
-            <div class="verticalSection">
-                <div id="acmeStatus" class="fieldDescription" style="padding: 1em 0;">Loading status&hellip;</div>
+            <div id="bpBanner" class="bp-banner" style="display:none;"></div>
+
+            <!-- Step 1 -->
+            <div class="bp-step" id="bpStep1">
+                <div class="bp-step-head"><span class="bp-dot">1</span><span>Your address</span></div>
+                <div class="bp-step-body">
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpDomain">Domain</label>
+                        <input is="emby-input" type="text" id="bpDomain" placeholder="jellyfin.example.com" autocomplete="off" />
+                        <div class="fieldDescription">
+                            The exact address you will type to reach this server. A subdomain of a
+                            domain you own works best, e.g. <code>jellyfin.example.com</code>.
+                        </div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpEmail">Email</label>
+                        <input is="emby-input" type="email" id="bpEmail" autocomplete="off" />
+                        <div class="fieldDescription">Only used by Let's Encrypt to warn you if renewal ever breaks.</div>
+                    </div>
+                    <button is="emby-button" type="button" id="bpSaveStep1" class="raised button-submit emby-button"><span>Continue</span></button>
+                </div>
             </div>
 
-            <form id="AcmeConfigForm">
-
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label class="emby-checkbox-label">
-                        <input is="emby-checkbox" type="checkbox" id="Enabled" />
-                        <span>Enable certificate management</span>
-                    </label>
-                    <div class="fieldDescription checkboxFieldDescription">
-                        Leave off until the settings below are filled in.
-                    </div>
-                </div>
-
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label class="emby-checkbox-label">
-                        <input is="emby-checkbox" type="checkbox" id="UseStaging" />
-                        <span>Use the staging certificate authority</span>
-                    </label>
-                    <div class="fieldDescription checkboxFieldDescription">
-                        Strongly recommended for the first run. Staging certificates are not
-                        trusted by browsers, but the rate limits are far more forgiving while
-                        you are getting the configuration right.
-                    </div>
-                </div>
-
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="Domain">Domain</label>
-                    <input is="emby-input" type="text" id="Domain" placeholder="media.example.com" />
-                    <div class="fieldDescription">The exact hostname you will use to reach this server.</div>
-                </div>
-
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="AccountEmail">Contact email</label>
-                    <input is="emby-input" type="email" id="AccountEmail" />
-                    <div class="fieldDescription">Used by the certificate authority for expiry warnings only.</div>
-                </div>
-
-                <div class="selectContainer">
-                    <label class="selectLabel" for="DnsProvider">DNS provider</label>
-                    <select is="emby-select" id="DnsProvider" class="emby-select-withcolor emby-select">
-                        <option value="0">None</option>
-                        <option value="1">Cloudflare</option>
-                    </select>
-                    <div class="fieldDescription">Where the DNS zone for this domain is hosted.</div>
-                </div>
-
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="DnsApiToken">DNS API token</label>
-                    <input is="emby-input" type="password" id="DnsApiToken" autocomplete="off" />
+            <!-- Step 2 -->
+            <div class="bp-step" id="bpStep2">
+                <div class="bp-step-head"><span class="bp-dot">2</span><span>Point it at your server</span></div>
+                <div class="bp-step-body">
+                    <p class="fieldDescription">
+                        At the place you manage DNS for your domain, add this record so your
+                        address leads here:
+                    </p>
+                    <div id="bpARecord" class="bp-record"></div>
                     <div class="fieldDescription">
-                        Scope this token as tightly as your provider allows. For Cloudflare that is
-                        <strong>Zone &rarr; DNS &rarr; Edit</strong>, restricted to this one zone. The token is
-                        stored on this server and is never written to the logs.
+                        Some DNS panels want only the first part of the name (e.g.
+                        <code>jellyfin</code>) — the rest is implied.
+                    </div>
+                    <p id="bpDnsCheck" class="fieldDescription"></p>
+                    <button is="emby-button" type="button" id="bpRecheck" class="raised emby-button"><span>Check again</span></button>
+                    <p class="fieldDescription">
+                        DNS changes can take a few minutes to show up. You can carry on — the
+                        certificate does not need this record, only your devices do.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Step 3 -->
+            <div class="bp-step" id="bpStep3">
+                <div class="bp-step-head"><span class="bp-dot">3</span><span>Prove you own the domain</span></div>
+                <div class="bp-step-body">
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="bpProvider">Where is your DNS hosted?</label>
+                        <select is="emby-select" id="bpProvider" class="emby-select-withcolor emby-select">
+                            <option value="None">Choose&hellip;</option>
+                            <option value="Cloudflare">Cloudflare — automatic</option>
+                            <option value="Manual">Somewhere else — I'll add a record when asked</option>
+                        </select>
+                    </div>
+                    <div id="bpCloudflareFields" style="display:none;">
+                        <div class="inputContainer">
+                            <label class="inputLabel inputLabelUnfocused" for="bpToken">Cloudflare API token</label>
+                            <input is="emby-input" type="password" id="bpToken" autocomplete="off" />
+                            <div class="fieldDescription">
+                                Create it at Cloudflare &rarr; My Profile &rarr; API Tokens, with the single
+                                permission <strong>Zone &rarr; DNS &rarr; Edit</strong>, limited to this one zone.
+                                It stays on this server and is never written to logs.
+                            </div>
+                        </div>
+                        <button is="emby-button" type="button" id="bpTestToken" class="raised emby-button"><span>Test the token</span></button>
+                        <p id="bpTokenResult" class="fieldDescription"></p>
+                    </div>
+                    <div id="bpManualNote" class="fieldDescription" style="display:none;">
+                        No token needed. In the next step this page will show you one TXT record to
+                        add by hand — with copy buttons — and wait for you.
                     </div>
                 </div>
+            </div>
 
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="CertificatePath">Certificate file path</label>
-                    <input is="emby-input" type="text" id="CertificatePath" placeholder="/config/ssl/jellyfin.pfx" />
-                    <div class="fieldDescription">
-                        Where to write the certificate. Set the same path under
-                        Networking &rarr; Certificate path, then restart the server so it is picked up.
+            <!-- Step 4 -->
+            <div class="bp-step" id="bpStep4">
+                <div class="bp-step-head"><span class="bp-dot">4</span><span>Get your certificate</span></div>
+                <div class="bp-step-body">
+                    <p class="fieldDescription">
+                        One click. A practice run against Let's Encrypt's test service proves the
+                        setup first, then the real certificate is issued. Nothing here touches
+                        playback.
+                    </p>
+                    <button is="emby-button" type="button" id="bpIssue" class="raised button-submit emby-button"><span>Get my certificate</span></button>
+                    <div id="bpProgress" style="display:none;">
+                        <div class="bp-progress"><span class="bp-spinner"></span><span id="bpPhaseText"></span></div>
                     </div>
-                </div>
-
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="RenewDaysBeforeExpiry">Renew this many days before expiry</label>
-                    <input is="emby-input" type="number" id="RenewDaysBeforeExpiry" min="1" max="60" />
-                </div>
-
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="DnsPropagationSeconds">Wait for DNS propagation (seconds)</label>
-                    <input is="emby-input" type="number" id="DnsPropagationSeconds" min="10" max="600" />
-                    <div class="fieldDescription">
-                        How long to wait after publishing the challenge record before asking the
-                        authority to check it. Increase this if validation times out.
+                    <div id="bpManualRecord" style="display:none;">
+                        <p class="fieldDescription">
+                            <strong>Your turn:</strong> add this TXT record at your DNS host
+                            <span id="bpManualAgain"></span>, then confirm below.
+                        </p>
+                        <div id="bpTxtRecord" class="bp-record"></div>
+                        <button is="emby-button" type="button" id="bpConfirmDns" class="raised button-submit emby-button"><span>I've added the record</span></button>
                     </div>
+                    <p id="bpIssueResult" class="fieldDescription"></p>
                 </div>
+            </div>
 
-                <div>
-                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
-                        <span>Save</span>
-                    </button>
-                    <button is="emby-button" type="button" id="RequestNow" class="raised block emby-button">
-                        <span>Request a certificate now</span>
-                    </button>
+            <!-- Step 5 -->
+            <div class="bp-step" id="bpStep5">
+                <div class="bp-step-head"><span class="bp-dot">5</span><span>Turn on HTTPS</span></div>
+                <div class="bp-step-body">
+                    <p class="fieldDescription">Jellyfin now needs to be told to use the certificate. Once, by hand:</p>
+                    <ol class="fieldDescription" style="line-height: 1.9;">
+                        <li>Open <strong>Dashboard &rarr; Networking</strong>.</li>
+                        <li>Tick <strong>Enable HTTPS</strong>.</li>
+                        <li>Paste this into <strong>Custom SSL certificate path</strong> (leave the password empty):
+                            <div id="bpCertPath" class="bp-record"></div>
+                        </li>
+                        <li>Save, then restart Jellyfin.</li>
+                    </ol>
+                    <p class="fieldDescription">
+                        To reach the server from outside your home, forward TCP port <strong>443</strong>
+                        on your router to this machine's HTTPS port (<strong>8920</strong> by default) —
+                        then <span id="bpFinalUrl"><code>https://your-domain</code></span> works everywhere.
+                        Renewal is automatic from here; a renewed certificate is picked up at the next restart.
+                    </p>
                 </div>
+            </div>
 
-            </form>
+            <details class="bp-advanced">
+                <summary>Advanced</summary>
+                <div style="padding-top: 1em;">
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input is="emby-checkbox" type="checkbox" id="bpUseStaging" />
+                            <span>Use the staging certificate authority</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">
+                            Cleared automatically once the guided flow's practice run succeeds.
+                        </div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpCertPathInput">Certificate file path</label>
+                        <input is="emby-input" type="text" id="bpCertPathInput" autocomplete="off" />
+                        <div class="fieldDescription">Leave empty to use the default inside Jellyfin's data directory.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpRenewDays">Renew this many days before expiry</label>
+                        <input is="emby-input" type="number" id="bpRenewDays" min="1" max="60" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpPropagation">Wait for DNS propagation (seconds)</label>
+                        <input is="emby-input" type="number" id="bpPropagation" min="1" max="600" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpDirectoryUrl">ACME directory URL override</label>
+                        <input is="emby-input" type="text" id="bpDirectoryUrl" autocomplete="off" />
+                        <div class="fieldDescription">For alternative certificate authorities. Leave empty for Let's Encrypt.</div>
+                    </div>
+                    <button is="emby-button" type="button" id="bpSaveAdvanced" class="raised emby-button"><span>Save advanced settings</span></button>
+                    <button is="emby-button" type="button" id="bpRequestRaw" class="raised emby-button"><span>Request once, no practice run</span></button>
+                </div>
+            </details>
+
         </div>
     </div>
 
     <script type="text/javascript">
         (function () {
             var pluginId = 'ec59d7bc-0644-4bfe-a924-b6ec7b88c1fb';
-            var page = document.querySelector('#AcmeConfigPage');
+            var page = document.querySelector('#BackporchConfigPage');
+            var cfg = null;
+            var status = null;
+            var check = null;
+            var pollTimer = null;
 
-            function renderStatus(status) {
-                var target = page.querySelector('#acmeStatus');
-                var lines = [];
-
-                if (status.CertificateExpiryUtc) {
-                    var expiry = new Date(status.CertificateExpiryUtc);
-                    var days = Math.round((expiry - new Date()) / 86400000);
-                    lines.push('Certificate expires ' + expiry.toDateString() + ' (' + days + ' days).');
-                } else {
-                    lines.push('No certificate has been issued yet.');
-                }
-
-                if (status.UsingStaging) {
-                    lines.push('Using the staging authority — this certificate is not trusted by browsers.');
-                }
-
-                lines.push('Last attempt: ' + (status.LastResult || 'never run'));
-                target.textContent = lines.join(' ');
+            function q(sel) { return page.querySelector(sel); }
+            function esc(s) {
+                return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+                    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+                });
             }
 
-            function loadStatus() {
-                ApiClient.ajax({
+            function copyText(text, btn) {
+                function flash() {
+                    if (!btn) { return; }
+                    var span = btn.querySelector('span') || btn;
+                    var old = span.textContent;
+                    span.textContent = 'Copied!';
+                    setTimeout(function () { span.textContent = old; }, 1500);
+                }
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(text).then(flash);
+                    return;
+                }
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); flash(); } catch (e) { /* leave selected */ }
+                document.body.removeChild(ta);
+            }
+
+            function recordRows(rows) {
+                var html = '';
+                rows.forEach(function (r) {
+                    html += '<span class="bp-k">' + esc(r[0]) + '</span><span class="bp-v">' + esc(r[1]) + '</span>';
+                    html += r[2]
+                        ? '<button type="button" class="bp-copy emby-button raised" data-copy="' + esc(r[1]) + '"><span>Copy</span></button>'
+                        : '<span></span>';
+                });
+                return html;
+            }
+
+            function wireCopyButtons(root) {
+                root.querySelectorAll('.bp-copy').forEach(function (btn) {
+                    btn.addEventListener('click', function () { copyText(btn.getAttribute('data-copy'), btn); });
+                });
+            }
+
+            function providerValue() {
+                var v = q('#bpProvider').value;
+                return v === 'Cloudflare' || v === 'Manual' ? v : 'None';
+            }
+
+            function normalizeProvider(value) {
+                if (value === 1 || value === '1') { return 'Cloudflare'; }
+                if (value === 2 || value === '2') { return 'Manual'; }
+                if (value === 'Cloudflare' || value === 'Manual') { return value; }
+                return 'None';
+            }
+
+            function stepState(el, state) {
+                el.classList.remove('bp-done', 'bp-active', 'bp-locked');
+                el.classList.add('bp-' + state);
+                var dot = el.querySelector('.bp-dot');
+                if (state === 'done') { dot.textContent = '✓'; }
+                else { dot.textContent = dot.getAttribute('data-n') || dot.textContent; }
+            }
+
+            function derive() {
+                var haveAddress = cfg && cfg.Domain && cfg.AccountEmail;
+                var provider = providerValue();
+                var dnsReady = provider === 'Manual'
+                    || (provider === 'Cloudflare' && q('#bpToken').value.trim() !== '');
+                var certDone = status && status.HasCertificateFile && status.CertificateExpiryUtc && !status.UsingStaging;
+                return { haveAddress: haveAddress, dnsReady: dnsReady, certDone: certDone };
+            }
+
+            function render() {
+                var d = derive();
+
+                stepState(q('#bpStep1'), d.haveAddress ? 'done' : 'active');
+                stepState(q('#bpStep2'), !d.haveAddress ? 'locked'
+                    : (check && check.DomainMatchesPublicIp ? 'done' : 'active'));
+                stepState(q('#bpStep3'), !d.haveAddress ? 'locked' : (d.dnsReady ? 'done' : 'active'));
+                stepState(q('#bpStep4'), !(d.haveAddress && d.dnsReady) ? 'locked'
+                    : (d.certDone ? 'done' : 'active'));
+                stepState(q('#bpStep5'), d.certDone ? 'active' : 'locked');
+
+                // Banner
+                var banner = q('#bpBanner');
+                if (d.certDone) {
+                    var expiry = new Date(status.CertificateExpiryUtc);
+                    var days = Math.round((expiry - new Date()) / 86400000);
+                    banner.innerHTML = '<span class="bp-ok">✓</span> Certificate for <strong>'
+                        + esc(status.Domain) + '</strong> is on disk — valid another ' + days
+                        + ' days, renews automatically.';
+                    banner.style.display = '';
+                } else {
+                    banner.style.display = 'none';
+                }
+
+                // Step 2: A record + check result
+                if (d.haveAddress) {
+                    var ip = (check && check.PublicIp) || 'detecting…';
+                    var rec = q('#bpARecord');
+                    rec.innerHTML = recordRows([
+                        ['Type', 'A', false],
+                        ['Name', cfg.Domain, true],
+                        ['Value', ip, !!(check && check.PublicIp)]
+                    ]);
+                    wireCopyButtons(rec);
+
+                    var line = q('#bpDnsCheck');
+                    if (!check) {
+                        line.textContent = '';
+                    } else if (check.DomainMatchesPublicIp) {
+                        line.innerHTML = '<span class="bp-ok">✓ ' + esc(cfg.Domain) + ' points at this server.</span>';
+                    } else if (check.ResolvedAddresses && check.ResolvedAddresses.length) {
+                        line.innerHTML = '<span class="bp-warn">The domain currently resolves to '
+                            + esc(check.ResolvedAddresses.join(', ')) + ' — not this server yet.</span>';
+                    } else {
+                        line.innerHTML = '<span class="bp-warn">The domain doesn\'t resolve yet — the record may still be propagating.</span>';
+                    }
+                }
+
+                // Step 3: provider fields
+                var provider = providerValue();
+                q('#bpCloudflareFields').style.display = provider === 'Cloudflare' ? '' : 'none';
+                q('#bpManualNote').style.display = provider === 'Manual' ? '' : 'none';
+
+                // Step 4: progress
+                renderProgress();
+
+                // Step 5: cert path
+                if (status && status.CertificatePath) {
+                    var cp = q('#bpCertPath');
+                    cp.innerHTML = recordRows([['Path', status.CertificatePath, true]]);
+                    wireCopyButtons(cp);
+                }
+                if (cfg && cfg.Domain) {
+                    q('#bpFinalUrl').innerHTML = '<code>https://' + esc(cfg.Domain) + '</code>';
+                }
+            }
+
+            function renderProgress() {
+                if (!status) { return; }
+
+                var running = status.Running;
+                var progress = q('#bpProgress');
+                var manual = q('#bpManualRecord');
+                var result = q('#bpIssueResult');
+                var issueBtn = q('#bpIssue');
+
+                issueBtn.disabled = running;
+
+                if (running) {
+                    progress.style.display = '';
+                    var label = status.PhaseDetail || status.Phase;
+                    if (status.IsTestRun) { label = '[practice run] ' + label; }
+                    q('#bpPhaseText').textContent = label;
+                    result.textContent = '';
+                } else {
+                    progress.style.display = 'none';
+                    if (status.Phase === 'Succeeded') {
+                        result.innerHTML = '<span class="bp-ok">✓ ' + esc(status.PhaseDetail || status.LastResult) + '</span>';
+                    } else if (status.Phase === 'Failed') {
+                        result.innerHTML = '<span class="bp-err">✗ ' + esc(status.PhaseDetail || status.LastResult)
+                            + '</span> — fix the issue and try again.';
+                    } else if (status.LastResult && status.LastResult !== 'Never run') {
+                        result.textContent = 'Last attempt: ' + status.LastResult;
+                    } else {
+                        result.textContent = '';
+                    }
+                }
+
+                if (status.PendingRecordName) {
+                    manual.style.display = '';
+                    q('#bpManualAgain').textContent = status.IsTestRun
+                        ? '(practice record — a second one with a new value follows)'
+                        : '(if a record with this name exists, replace its value)';
+                    var txt = q('#bpTxtRecord');
+                    txt.innerHTML = recordRows([
+                        ['Type', 'TXT', false],
+                        ['Name', status.PendingRecordName, true],
+                        ['Value', status.PendingRecordValue, true]
+                    ]);
+                    wireCopyButtons(txt);
+                    q('#bpConfirmDns').disabled = status.Phase !== 'AwaitingDnsRecord';
+                } else {
+                    manual.style.display = 'none';
+                }
+            }
+
+            function fetchStatus() {
+                return ApiClient.ajax({
                     type: 'GET',
                     url: ApiClient.getUrl('Backporch/Status'),
                     dataType: 'json'
-                }).then(renderStatus);
+                }).then(function (s) {
+                    status = s;
+                    if (s.Running) { startPolling(); } else { stopPolling(); }
+                    render();
+                    return s;
+                });
             }
+
+            function startPolling() {
+                if (pollTimer) { return; }
+                pollTimer = setInterval(fetchStatus, 2000);
+            }
+
+            function stopPolling() {
+                if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            }
+
+            function runCheck() {
+                return ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('Backporch/Check'),
+                    dataType: 'json'
+                }).then(function (c) { check = c; render(); return c; }, function () { check = null; });
+            }
+
+            function readForm() {
+                cfg.Domain = q('#bpDomain').value.trim();
+                cfg.AccountEmail = q('#bpEmail').value.trim();
+                cfg.DnsProvider = providerValue();
+                cfg.DnsApiToken = q('#bpToken').value;
+                cfg.UseStaging = q('#bpUseStaging').checked;
+                cfg.CertificatePath = q('#bpCertPathInput').value.trim();
+                cfg.RenewDaysBeforeExpiry = parseInt(q('#bpRenewDays').value, 10) || 30;
+                cfg.DnsPropagationSeconds = parseInt(q('#bpPropagation').value, 10) || 60;
+                cfg.DirectoryUrl = q('#bpDirectoryUrl').value.trim();
+                if (cfg.Domain && cfg.AccountEmail && cfg.DnsProvider !== 'None') {
+                    cfg.Enabled = true;
+                }
+            }
+
+            function saveConfig() {
+                readForm();
+                return ApiClient.updatePluginConfiguration(pluginId, cfg);
+            }
+
+            function fillForm() {
+                q('#bpDomain').value = cfg.Domain || '';
+                q('#bpEmail').value = cfg.AccountEmail || '';
+                q('#bpProvider').value = normalizeProvider(cfg.DnsProvider);
+                q('#bpToken').value = cfg.DnsApiToken || '';
+                q('#bpUseStaging').checked = !!cfg.UseStaging;
+                q('#bpCertPathInput').value = cfg.CertificatePath || '';
+                q('#bpRenewDays').value = cfg.RenewDaysBeforeExpiry || 30;
+                q('#bpPropagation').value = cfg.DnsPropagationSeconds || 60;
+                q('#bpDirectoryUrl').value = cfg.DirectoryUrl || '';
+            }
+
+            // Number the dots once so stepState can restore them.
+            page.querySelectorAll('.bp-dot').forEach(function (dot) {
+                dot.setAttribute('data-n', dot.textContent);
+            });
 
             page.addEventListener('pageshow', function () {
                 Dashboard.showLoadingMsg();
-
                 ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                    page.querySelector('#Enabled').checked = config.Enabled;
-                    page.querySelector('#UseStaging').checked = config.UseStaging;
-                    page.querySelector('#Domain').value = config.Domain || '';
-                    page.querySelector('#AccountEmail').value = config.AccountEmail || '';
-                    page.querySelector('#DnsProvider').value = config.DnsProvider || 0;
-                    page.querySelector('#DnsApiToken').value = config.DnsApiToken || '';
-                    page.querySelector('#CertificatePath').value = config.CertificatePath || '';
-                    page.querySelector('#RenewDaysBeforeExpiry').value = config.RenewDaysBeforeExpiry || 30;
-                    page.querySelector('#DnsPropagationSeconds').value = config.DnsPropagationSeconds || 60;
-
+                    cfg = config;
+                    fillForm();
                     Dashboard.hideLoadingMsg();
-                    loadStatus();
-                });
-            });
-
-            page.querySelector('#AcmeConfigForm').addEventListener('submit', function (e) {
-                e.preventDefault();
-                Dashboard.showLoadingMsg();
-
-                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                    config.Enabled = page.querySelector('#Enabled').checked;
-                    config.UseStaging = page.querySelector('#UseStaging').checked;
-                    config.Domain = page.querySelector('#Domain').value.trim();
-                    config.AccountEmail = page.querySelector('#AccountEmail').value.trim();
-                    config.DnsProvider = parseInt(page.querySelector('#DnsProvider').value, 10);
-                    config.DnsApiToken = page.querySelector('#DnsApiToken').value;
-                    config.CertificatePath = page.querySelector('#CertificatePath').value.trim();
-                    config.RenewDaysBeforeExpiry = parseInt(page.querySelector('#RenewDaysBeforeExpiry').value, 10);
-                    config.DnsPropagationSeconds = parseInt(page.querySelector('#DnsPropagationSeconds').value, 10);
-
-                    ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
-                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    render();
+                    fetchStatus().then(function () {
+                        if (cfg.Domain && cfg.AccountEmail) { runCheck(); }
                     });
                 });
-
-                return false;
             });
 
-            page.querySelector('#RequestNow').addEventListener('click', function () {
-                Dashboard.showLoadingMsg();
-                page.querySelector('#acmeStatus').textContent =
-                    'Requesting a certificate. This can take a couple of minutes while DNS propagates.';
+            page.addEventListener('pagehide', stopPolling);
 
+            q('#bpSaveStep1').addEventListener('click', function () {
+                saveConfig().then(function () { render(); runCheck(); });
+            });
+
+            q('#bpRecheck').addEventListener('click', function () {
+                saveConfig().then(runCheck);
+            });
+
+            q('#bpProvider').addEventListener('change', render);
+            q('#bpToken').addEventListener('input', render);
+
+            q('#bpTestToken').addEventListener('click', function () {
+                var out = q('#bpTokenResult');
+                out.textContent = 'Testing…';
+                saveConfig().then(runCheck).then(function () {
+                    if (check && check.ZoneOk) {
+                        out.innerHTML = '<span class="bp-ok">✓ Token works — zone ' + esc(check.ZoneName) + ' found.</span>';
+                    } else if (check && check.ZoneError) {
+                        out.innerHTML = '<span class="bp-err">✗ ' + esc(check.ZoneError) + '</span>';
+                    } else {
+                        out.innerHTML = '<span class="bp-err">✗ The check did not run — is the token filled in?</span>';
+                    }
+                });
+            });
+
+            function requestCertificate(guided) {
+                saveConfig().then(function () {
+                    return ApiClient.ajax({
+                        type: 'POST',
+                        url: ApiClient.getUrl('Backporch/Request', guided ? { guided: 'true' } : {}),
+                        dataType: 'json'
+                    });
+                }).then(function () {
+                    startPolling();
+                    fetchStatus();
+                }, function () {
+                    q('#bpIssueResult').innerHTML =
+                        '<span class="bp-err">✗ The request could not be started — check the server log.</span>';
+                });
+            }
+
+            q('#bpIssue').addEventListener('click', function () { requestCertificate(true); });
+            q('#bpRequestRaw').addEventListener('click', function () { requestCertificate(false); });
+
+            q('#bpConfirmDns').addEventListener('click', function () {
                 ApiClient.ajax({
                     type: 'POST',
-                    url: ApiClient.getUrl('Backporch/Request'),
+                    url: ApiClient.getUrl('Backporch/ConfirmDns'),
                     dataType: 'json'
-                }).then(function (status) {
-                    Dashboard.hideLoadingMsg();
-                    renderStatus(status);
-                }, function () {
-                    Dashboard.hideLoadingMsg();
-                    page.querySelector('#acmeStatus').textContent =
-                        'The request failed. Check the server log for details.';
+                }).then(fetchStatus, fetchStatus);
+            });
+
+            q('#bpSaveAdvanced').addEventListener('click', function () {
+                saveConfig().then(function (result) {
+                    Dashboard.processPluginConfigurationUpdateResult(result);
+                    render();
                 });
             });
         })();

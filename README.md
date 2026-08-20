@@ -16,16 +16,39 @@ This is the missing half of "zero-config remote access": the part that is
 honestly achievable as open source, with no vendor infrastructure — you supply
 the one thing only you can own, the domain.
 
+## The experience
+
+The configuration page is a guided setup, not a settings form. You type two
+things — your domain and an email — and the page walks you through the rest:
+
+1. **Your address** — domain + email. That's all the typing.
+2. **Point it at your server** — the page detects your public IP and shows the
+   exact A record to add, with copy buttons, then verifies live that the domain
+   resolves to you.
+3. **Prove you own the domain** — either a Cloudflare API token (fully
+   automatic, with a "test the token" check), or **any other DNS host**: the
+   page shows you one TXT record to add by hand when the time comes and waits
+   for you.
+4. **Get your certificate** — one button. A practice run against Let's
+   Encrypt's staging service proves the setup without spending production rate
+   limits; on success the real certificate is issued immediately. Progress
+   streams live and survives page reloads — the state lives on the server.
+5. **Turn on HTTPS** — the page hands you the certificate path to paste into
+   **Networking → Custom SSL certificate path** (password stays empty), plus
+   the port-forward note for remote access.
+
 ## How it works
 
-1. You configure a domain, a contact email, and a DNS provider API token.
-2. The plugin registers an ACME account (key generated locally, reused forever).
-3. For each issuance it publishes a `_acme-challenge` TXT record, waits for
-   propagation, asks the CA to validate, then removes the record again.
-4. The certificate and key are written atomically to a PKCS#12 file with
-   owner-only permissions, at the path you point Jellyfin's
-   **Networking → Certificate path** setting to.
-5. A daily scheduled task renews when expiry is inside the threshold
+1. The plugin registers an ACME account (key generated locally, reused forever,
+   valid on staging and production alike).
+2. For each issuance it publishes a `_acme-challenge` TXT record — via the
+   provider API, or by showing it to you in manual mode — waits for
+   propagation, asks the CA to validate, then cleans up.
+3. The certificate and key are written atomically to a PKCS#12 file with
+   owner-only permissions. The path defaults to Jellyfin's own data directory;
+   no password is set on the bundle — one would have to be stored in plain text
+   beside it anyway, so the `0600` file mode is the real boundary.
+4. A daily scheduled task renews when expiry is inside the threshold
    (default 30 days). Renewal does nothing when the certificate is healthy.
 
 ## Security posture
@@ -56,11 +79,8 @@ the one thing only you can own, the domain.
 
 1. Run `./package.sh` (or grab a release zip).
 2. Unzip into `config/plugins/Backporch_0.1.0.0/` on the server.
-3. Restart Jellyfin, then open **Dashboard → Plugins → Backporch**.
-4. Fill in domain, email, provider, token, and a certificate path. Leave
-   **staging** on. Press **Request a certificate now**.
-5. When staging succeeds, switch staging off, request again, then set
-   **Networking → Certificate path** to the same file and restart.
+3. Restart Jellyfin, then open **Dashboard → Plugins → Backporch** and follow
+   the steps on the page.
 
 ## Verified so far
 
@@ -88,7 +108,9 @@ API against a live zone.
 ## Known limitations
 
 - One domain, one certificate. No wildcard or SAN list yet.
-- Cloudflare is the only DNS provider implemented so far.
+- Cloudflare is the only *automatic* DNS provider so far; every other host
+  works through manual mode, at the cost of a copy-and-paste per issuance
+  (which includes renewals — automatic renewal needs an API provider).
 - Jellyfin loads the certificate at startup, so a renewed certificate is
   picked up at the next restart. (A future core contribution could hot-reload
   via Kestrel's certificate selector.)

@@ -11,7 +11,13 @@ public enum DnsProviderKind
     None = 0,
 
     /// <summary>Cloudflare, via the v4 API.</summary>
-    Cloudflare = 1
+    Cloudflare = 1,
+
+    /// <summary>
+    /// Any other DNS host: the user adds the challenge TXT record by hand when the
+    /// configuration page shows it. No API token involved.
+    /// </summary>
+    Manual = 2
 }
 
 /// <summary>
@@ -83,7 +89,10 @@ public class PluginConfiguration : BasePluginConfiguration
     public string CertificatePath { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the password protecting the PKCS#12 bundle. Generated on first use.
+    /// Gets or sets an optional password for the PKCS#12 bundle. Empty by default:
+    /// any password would have to be stored in plain text beside the file anyway, so
+    /// it adds nothing — the owner-only file mode is the real boundary. Setting one
+    /// means also entering it under Networking &#8594; Certificate password.
     /// </summary>
     public string CertificatePassword { get; set; } = string.Empty;
 

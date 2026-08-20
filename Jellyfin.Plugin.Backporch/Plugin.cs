@@ -21,12 +21,20 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         : base(applicationPaths, xmlSerializer)
     {
         Instance = this;
+        DefaultCertificatePath = Path.Combine(applicationPaths.DataPath, "backporch", "certificate.pfx");
     }
 
     /// <summary>
     /// Gets the singleton instance, used by services that Jellyfin does not inject into.
     /// </summary>
     public static Plugin? Instance { get; private set; }
+
+    /// <summary>
+    /// Gets the certificate path used when the user has not chosen one — inside
+    /// Jellyfin's own data directory, so it survives container recreation without
+    /// any extra volume mapping.
+    /// </summary>
+    public string DefaultCertificatePath { get; }
 
     /// <inheritdoc />
     public override string Name => "Backporch";
