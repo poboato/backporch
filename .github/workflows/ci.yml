@@ -29,6 +29,23 @@ jobs:
           name: backporch
           path: dist/backporch_*.zip
 
+  config-page-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install playwright
+        run: |
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Guided setup flow in headless Chromium
+        run: node tests/ui/configpage.test.mjs
+
   issuance-against-pebble:
     runs-on: ubuntu-latest
     steps:

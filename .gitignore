@@ -6,3 +6,4 @@ obj/
 *.key
 secrets.json
 dist/
+node_modules/

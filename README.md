@@ -102,6 +102,12 @@ And against Let's Encrypt's **Pebble** test CA (real ACME, no real DNS):
   and a PKCS#12 on disk with owner-only permissions that matches the hostname.
   This runs in CI on every push.
 
+And the guided setup page itself, in headless Chromium
+(`tests/ui/configpage.test.mjs`, also in CI): step locking and unlocking, the
+A-record display with the detected public IP, the live DNS check, both DNS
+modes, the manual TXT-record card with its confirmation handshake, progress
+labels during a practice run, and the success banner into step 5.
+
 Not yet exercised: Let's Encrypt staging with a real domain, and the Cloudflare
 API against a live zone.
 
