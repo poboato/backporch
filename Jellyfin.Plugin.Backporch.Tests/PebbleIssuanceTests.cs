@@ -12,6 +12,7 @@ namespace Jellyfin.Plugin.Backporch.Tests;
 /// https://localhost:14000/dir) and BACKPORCH_CHALLTESTSRV (e.g.
 /// http://localhost:8055) to enable, otherwise the test is skipped.
 /// </summary>
+[Collection("Pebble")]
 public class PebbleIssuanceTests
 {
     private sealed class SingleClientFactory : IHttpClientFactory
@@ -34,6 +35,7 @@ public class PebbleIssuanceTests
         var config = new PluginConfiguration
         {
             Enabled = true,
+            Challenge = ChallengeKind.Dns,
             Domain = "backporch.test",
             AccountEmail = "test@backporch.test",
             CertificatePath = pfxPath,
@@ -48,7 +50,8 @@ public class PebbleIssuanceTests
         };
         using var acmeHttp = new HttpClient(insecureHandler);
 
-        var service = new AcmeService(NullLogger<AcmeService>.Instance, new SingleClientFactory(), new IssuanceState());
+        var service = new AcmeService(
+            NullLogger<AcmeService>.Instance, new SingleClientFactory(), new IssuanceState(), new HttpChallengeStore());
         var dns = new ChallTestSrvDnsProvider(new HttpClient(), challSrv);
 
         try

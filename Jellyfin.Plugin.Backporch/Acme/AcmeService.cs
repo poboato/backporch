@@ -25,6 +25,7 @@ public sealed class AcmeService
     private readonly ILogger<AcmeService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IssuanceState _state;
+    private readonly HttpChallengeStore _httpChallenges;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="AcmeService"/> class.
@@ -32,11 +33,17 @@ public sealed class AcmeService
     /// <param name="logger">Logger.</param>
     /// <param name="httpClientFactory">Factory for provider HTTP clients.</param>
     /// <param name="state">Shared progress state polled by the configuration page.</param>
-    public AcmeService(ILogger<AcmeService> logger, IHttpClientFactory httpClientFactory, IssuanceState state)
+    /// <param name="httpChallenges">Store the anonymous challenge route serves from.</param>
+    public AcmeService(
+        ILogger<AcmeService> logger,
+        IHttpClientFactory httpClientFactory,
+        IssuanceState state,
+        HttpChallengeStore httpChallenges)
     {
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _state = state;
+        _httpChallenges = httpChallenges;
     }
 
     /// <summary>
@@ -155,7 +162,7 @@ public sealed class AcmeService
                 {
                     await IssueCertificateAsync(
                         testConfig,
-                        CreateDnsProvider(testConfig),
+                        testConfig.Challenge == ChallengeKind.Dns ? CreateDnsProvider(testConfig) : null,
                         WellKnownServers.LetsEncryptStagingV2,
                         acmeHttpClient: null,
                         cancellationToken).ConfigureAwait(false);
@@ -243,14 +250,17 @@ public sealed class AcmeService
             return "No contact email configured.";
         }
 
-        if (config.DnsProvider == DnsProviderKind.None)
+        if (config.Challenge == ChallengeKind.Dns)
         {
-            return "Choose how the DNS challenge record will be added.";
-        }
+            if (config.DnsProvider == DnsProviderKind.None)
+            {
+                return "Choose how the DNS challenge record will be added.";
+            }
 
-        if (config.DnsProvider == DnsProviderKind.Cloudflare && string.IsNullOrWhiteSpace(config.DnsApiToken))
-        {
-            return "Cloudflare is selected but no API token is set.";
+            if (config.DnsProvider == DnsProviderKind.Cloudflare && string.IsNullOrWhiteSpace(config.DnsApiToken))
+            {
+                return "Cloudflare is selected but no API token is set.";
+            }
         }
 
         if (string.IsNullOrWhiteSpace(config.CertificatePath))
@@ -273,6 +283,7 @@ public sealed class AcmeService
     private static PluginConfiguration CloneForTestRun(PluginConfiguration config) => new()
     {
         Enabled = config.Enabled,
+        Challenge = config.Challenge,
         Domain = config.Domain,
         AccountEmail = config.AccountEmail,
         DnsProvider = config.DnsProvider,
@@ -302,7 +313,12 @@ public sealed class AcmeService
                 ? WellKnownServers.LetsEncryptStagingV2
                 : WellKnownServers.LetsEncryptV2;
 
-        return IssueCertificateAsync(config, CreateDnsProvider(config), directory, acmeHttpClient: null, cancellationToken);
+        return IssueCertificateAsync(
+            config,
+            config.Challenge == ChallengeKind.Dns ? CreateDnsProvider(config) : null,
+            directory,
+            acmeHttpClient: null,
+            cancellationToken);
     }
 
     /// <summary>
@@ -311,14 +327,14 @@ public sealed class AcmeService
     /// it against a test CA.
     /// </summary>
     /// <param name="config">The configuration to issue for.</param>
-    /// <param name="dnsProvider">The DNS provider used to answer the challenge.</param>
+    /// <param name="dnsProvider">The DNS provider answering the challenge; required for DNS-01 only.</param>
     /// <param name="directory">The ACME directory endpoint.</param>
     /// <param name="acmeHttpClient">Optional HTTP client for ACME traffic (test CAs use self-signed TLS).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The UTC expiry of the issued certificate.</returns>
     public async Task<DateTime> IssueCertificateAsync(
         PluginConfiguration config,
-        IDnsProvider dnsProvider,
+        IDnsProvider? dnsProvider,
         Uri directory,
         HttpClient? acmeHttpClient,
         CancellationToken cancellationToken)
@@ -331,45 +347,27 @@ public sealed class AcmeService
         var authorizations = await order.Authorizations().ConfigureAwait(false);
 
         var placedRecords = new List<string>();
+        var placedTokens = new List<string>();
 
         try
         {
             foreach (var authorization in authorizations)
             {
-                var challenge = await authorization.Dns().ConfigureAwait(false);
-                var digest = acme.AccountKey.DnsTxt(challenge.Token);
-
-                var resource = await authorization.Resource().ConfigureAwait(false);
-                var recordName = "_acme-challenge." + resource.Identifier.Value.TrimStart('*', '.');
-
-                // The manual provider flips the phase to AwaitingDnsRecord while it
-                // waits for the user; API providers pass straight through.
-                _state.Report(IssuancePhase.PublishingDns, "Publishing the DNS challenge record…");
-                var handle = await dnsProvider
-                    .CreateTxtRecordAsync(recordName, digest, cancellationToken).ConfigureAwait(false);
-                placedRecords.Add(handle);
-
-                _logger.LogInformation(
-                    "Waiting {Seconds}s for DNS propagation before asking the CA to validate",
-                    config.DnsPropagationSeconds);
-
-                var remaining = TimeSpan.FromSeconds(config.DnsPropagationSeconds);
-                while (remaining > TimeSpan.Zero)
+                if (config.Challenge == ChallengeKind.Http)
                 {
-                    _state.Report(
-                        IssuancePhase.Propagating,
-                        string.Create(
-                            CultureInfo.InvariantCulture,
-                            $"Waiting for DNS to propagate — about {(int)remaining.TotalSeconds}s left…"));
-
-                    var step = remaining > _pollInterval ? _pollInterval : remaining;
-                    await Task.Delay(step, cancellationToken).ConfigureAwait(false);
-                    remaining -= step;
+                    await AnswerHttpChallengeAsync(acme, authorization, placedTokens, cancellationToken)
+                        .ConfigureAwait(false);
                 }
-
-                _state.Report(IssuancePhase.Validating, "The certificate authority is checking the record…");
-                await challenge.Validate().ConfigureAwait(false);
-                await WaitForValidationAsync(authorization, cancellationToken).ConfigureAwait(false);
+                else
+                {
+                    await AnswerDnsChallengeAsync(
+                        acme,
+                        authorization,
+                        dnsProvider ?? throw new InvalidOperationException("DNS-01 requires a DNS provider."),
+                        config,
+                        placedRecords,
+                        cancellationToken).ConfigureAwait(false);
+                }
             }
 
             _state.Report(IssuancePhase.Finalizing, "Downloading the certificate…");
@@ -391,11 +389,92 @@ public sealed class AcmeService
         }
         finally
         {
-            foreach (var handle in placedRecords)
+            foreach (var token in placedTokens)
             {
-                await dnsProvider.DeleteTxtRecordAsync(handle, CancellationToken.None).ConfigureAwait(false);
+                _httpChallenges.Remove(token);
+            }
+
+            if (dnsProvider is not null)
+            {
+                foreach (var handle in placedRecords)
+                {
+                    await dnsProvider.DeleteTxtRecordAsync(handle, CancellationToken.None).ConfigureAwait(false);
+                }
             }
         }
+    }
+
+    /// <summary>
+    /// HTTP-01: publish the key authorization on this server's own well-known route and
+    /// let the CA fetch it. Nothing external to create, no propagation to wait for.
+    /// </summary>
+    private async Task AnswerHttpChallengeAsync(
+        IAcmeContext acme,
+        IAuthorizationContext authorization,
+        List<string> placedTokens,
+        CancellationToken cancellationToken)
+    {
+        var challenge = await authorization.Http().ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                "The certificate authority offered no HTTP challenge for this order.");
+
+        var keyAuthorization = acme.AccountKey.KeyAuthorization(challenge.Token);
+        _httpChallenges.Put(challenge.Token, keyAuthorization);
+        placedTokens.Add(challenge.Token);
+
+        _state.Report(
+            IssuancePhase.Validating,
+            "The certificate authority is contacting this server on port 80…");
+        await challenge.Validate().ConfigureAwait(false);
+        await WaitForValidationAsync(authorization, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// DNS-01: publish the challenge TXT record (via API or the user's hands), wait out
+    /// propagation, then ask the CA to look.
+    /// </summary>
+    private async Task AnswerDnsChallengeAsync(
+        IAcmeContext acme,
+        IAuthorizationContext authorization,
+        IDnsProvider dnsProvider,
+        PluginConfiguration config,
+        List<string> placedRecords,
+        CancellationToken cancellationToken)
+    {
+        var challenge = await authorization.Dns().ConfigureAwait(false);
+        var digest = acme.AccountKey.DnsTxt(challenge.Token);
+
+        var resource = await authorization.Resource().ConfigureAwait(false);
+        var recordName = "_acme-challenge." + resource.Identifier.Value.TrimStart('*', '.');
+
+        // The manual provider flips the phase to AwaitingDnsRecord while it
+        // waits for the user; API providers pass straight through.
+        _state.Report(IssuancePhase.PublishingDns, "Publishing the DNS challenge record…");
+        var handle = await dnsProvider
+            .CreateTxtRecordAsync(recordName, digest, cancellationToken).ConfigureAwait(false);
+        placedRecords.Add(handle);
+
+        _logger.LogInformation(
+            "Waiting {Seconds}s for DNS propagation before asking the CA to validate",
+            config.DnsPropagationSeconds);
+
+        var remaining = TimeSpan.FromSeconds(config.DnsPropagationSeconds);
+        while (remaining > TimeSpan.Zero)
+        {
+            _state.Report(
+                IssuancePhase.Propagating,
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"Waiting for DNS to propagate — about {(int)remaining.TotalSeconds}s left…"));
+
+            var step = remaining > _pollInterval ? _pollInterval : remaining;
+            await Task.Delay(step, cancellationToken).ConfigureAwait(false);
+            remaining -= step;
+        }
+
+        _state.Report(IssuancePhase.Validating, "The certificate authority is checking the record…");
+        await challenge.Validate().ConfigureAwait(false);
+        await WaitForValidationAsync(authorization, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<IAcmeContext> GetOrCreateAccountAsync(

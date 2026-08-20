@@ -21,10 +21,34 @@ public enum DnsProviderKind
 }
 
 /// <summary>
+/// How ownership of the domain is proven to the certificate authority.
+/// </summary>
+public enum ChallengeKind
+{
+    /// <summary>
+    /// HTTP-01: the CA fetches a token from this very server over port 80. Nothing to
+    /// create or copy — the domain's A record plus a port forward is the whole setup,
+    /// and renewal is fully automatic. The default.
+    /// </summary>
+    Http = 0,
+
+    /// <summary>
+    /// DNS-01: a TXT record answers the challenge, via a provider API or by hand.
+    /// Works without any inbound connectivity.
+    /// </summary>
+    Dns = 1
+}
+
+/// <summary>
 /// Plugin settings. Persisted by Jellyfin as XML under the plugin configuration directory.
 /// </summary>
 public class PluginConfiguration : BasePluginConfiguration
 {
+    /// <summary>
+    /// Gets or sets how the domain-ownership challenge is answered.
+    /// </summary>
+    public ChallengeKind Challenge { get; set; } = ChallengeKind.Http;
+
     /// <summary>
     /// Gets or sets the fully qualified domain name the certificate is issued for,
     /// for example <c>media.example.com</c>.

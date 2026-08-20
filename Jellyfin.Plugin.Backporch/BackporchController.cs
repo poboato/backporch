@@ -4,6 +4,7 @@ using Jellyfin.Plugin.Backporch.Acme;
 using Jellyfin.Plugin.Backporch.Configuration;
 using Jellyfin.Plugin.Backporch.Dns;
 using MediaBrowser.Common.Api;
+using MediaBrowser.Controller;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -22,6 +23,7 @@ public class BackporchController : ControllerBase
     private readonly AcmeService _acmeService;
     private readonly IssuanceState _state;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IServerApplicationHost _appHost;
     private readonly ILogger<BackporchController> _logger;
 
     /// <summary>
@@ -30,16 +32,19 @@ public class BackporchController : ControllerBase
     /// <param name="acmeService">The issuance service.</param>
     /// <param name="state">Shared issuance progress state.</param>
     /// <param name="httpClientFactory">Factory for the preflight check's HTTP calls.</param>
+    /// <param name="appHost">The server host, for its listening ports.</param>
     /// <param name="logger">Logger.</param>
     public BackporchController(
         AcmeService acmeService,
         IssuanceState state,
         IHttpClientFactory httpClientFactory,
+        IServerApplicationHost appHost,
         ILogger<BackporchController> logger)
     {
         _acmeService = acmeService;
         _state = state;
         _httpClientFactory = httpClientFactory;
+        _appHost = appHost;
         _logger = logger;
     }
 
@@ -113,7 +118,7 @@ public class BackporchController : ControllerBase
     public async Task<ActionResult<BackporchCheckDto>> Check(CancellationToken cancellationToken)
     {
         var config = Plugin.Instance!.Configuration;
-        var dto = new BackporchCheckDto { Domain = config.Domain };
+        var dto = new BackporchCheckDto { Domain = config.Domain, HttpPort = _appHost.HttpPort };
 
         try
         {
@@ -259,6 +264,9 @@ public class BackporchCheckDto
 
     /// <summary>Gets or sets the server's detected public IPv4 address, if reachable.</summary>
     public string? PublicIp { get; set; }
+
+    /// <summary>Gets or sets the port Jellyfin serves plain HTTP on (port-80 forward target).</summary>
+    public int HttpPort { get; set; }
 
     /// <summary>Gets or sets the addresses the domain currently resolves to.</summary>
     public IReadOnlyList<string>? ResolvedAddresses { get; set; }

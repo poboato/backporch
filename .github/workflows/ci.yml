@@ -55,20 +55,23 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
+      # Host networking so Pebble's HTTP-01 validation can reach the test's challenge
+      # responder at 127.0.0.1:5002 (challtestsrv's own http01 server is disabled to
+      # free that port). DNS-01 uses the same challtestsrv DNS as before.
       - name: Start Pebble test CA
         run: |
-          docker network create pebble
-          docker run -d --name challtestsrv --network pebble -p 8055:8055 \
-            ghcr.io/letsencrypt/pebble-challtestsrv:latest -defaultIPv4 "" -defaultIPv6 ""
-          docker run -d --name pebble --network pebble -p 14000:14000 \
-            ghcr.io/letsencrypt/pebble:latest -dnsserver challtestsrv:8053
+          docker run -d --name challtestsrv --network host \
+            ghcr.io/letsencrypt/pebble-challtestsrv:latest -defaultIPv4 "" -defaultIPv6 "" -http01 ""
+          docker run -d --name pebble --network host \
+            ghcr.io/letsencrypt/pebble:latest -dnsserver 127.0.0.1:8053
           for i in $(seq 1 30); do
             curl -sk https://localhost:14000/dir >/dev/null && break
             sleep 1
           done
 
-      - name: End-to-end issuance
+      - name: End-to-end issuance (DNS-01 and HTTP-01)
         env:
           BACKPORCH_PEBBLE_DIR: https://localhost:14000/dir
           BACKPORCH_CHALLTESTSRV: http://localhost:8055
+          BACKPORCH_HTTP01_IP: 127.0.0.1
         run: dotnet test Jellyfin.Plugin.Backporch.Tests/Jellyfin.Plugin.Backporch.Tests.csproj -c Release --filter "Category=Integration"

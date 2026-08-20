@@ -145,8 +145,10 @@
                     <p id="bpDnsCheck" class="fieldDescription"></p>
                     <button is="emby-button" type="button" id="bpRecheck" class="raised emby-button"><span>Check again</span></button>
                     <p class="fieldDescription">
-                        DNS changes can take a few minutes to show up. You can carry on — the
-                        certificate does not need this record, only your devices do.
+                        DNS changes can take a few minutes to show up. With the recommended
+                        automatic proof (next step), Let's Encrypt follows this record to your
+                        server — so it needs to be green before the certificate step. The DNS
+                        proof options work without it.
                     </p>
                 </div>
             </div>
@@ -156,21 +158,28 @@
                 <div class="bp-step-head"><span class="bp-dot">3</span><span>Prove you own the domain</span></div>
                 <div class="bp-step-body">
                     <div class="selectContainer">
-                        <label class="selectLabel" for="bpProvider">Where is your DNS hosted?</label>
+                        <label class="selectLabel" for="bpProvider">How?</label>
                         <select is="emby-select" id="bpProvider" class="emby-select-withcolor emby-select">
-                            <option value="None">Choose&hellip;</option>
-                            <option value="Cloudflare">Cloudflare — automatic</option>
-                            <option value="Manual">Somewhere else — I'll add a record when asked</option>
+                            <option value="Http">Through this server — automatic (recommended)</option>
+                            <option value="Cloudflare">With a Cloudflare API token</option>
+                            <option value="Manual">I'll add a DNS record by hand when asked</option>
                         </select>
+                    </div>
+                    <div id="bpHttpFields" class="fieldDescription" style="display:none;">
+                        Let's Encrypt fetches a proof file straight from this server — Backporch
+                        answers it for you, now and at every renewal. Nothing to create, nothing to
+                        copy. The one requirement: forward TCP port <strong>80</strong> on your
+                        router to this machine's HTTP port (<strong id="bpHttpPort">8096</strong>).
+                        Can't open port 80? Pick a DNS option instead.
                     </div>
                     <div id="bpCloudflareFields" style="display:none;">
                         <div class="inputContainer">
                             <label class="inputLabel inputLabelUnfocused" for="bpToken">Cloudflare API token</label>
                             <input is="emby-input" type="password" id="bpToken" autocomplete="off" />
                             <div class="fieldDescription">
-                                Create it at Cloudflare &rarr; My Profile &rarr; API Tokens, with the single
-                                permission <strong>Zone &rarr; DNS &rarr; Edit</strong>, limited to this one zone.
-                                It stays on this server and is never written to logs.
+                                <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">Create
+                                one here</a> using Cloudflare's built-in <strong>Edit zone DNS</strong> template,
+                                limited to this one zone. It stays on this server and is never written to logs.
                             </div>
                         </div>
                         <button is="emby-button" type="button" id="bpTestToken" class="raised emby-button"><span>Test the token</span></button>
@@ -178,7 +187,8 @@
                     </div>
                     <div id="bpManualNote" class="fieldDescription" style="display:none;">
                         No token needed. In the next step this page will show you one TXT record to
-                        add by hand — with copy buttons — and wait for you.
+                        add by hand — with copy buttons — and wait for you. (Renewals ask again,
+                        so the automatic options are less work over time.)
                     </div>
                 </div>
             </div>
@@ -323,9 +333,11 @@
                 });
             }
 
-            function providerValue() {
+            // The proof mode collapses Challenge + DnsProvider into one user choice:
+            // 'Http' (serve the proof ourselves), 'Cloudflare', or 'Manual'.
+            function proofValue() {
                 var v = q('#bpProvider').value;
-                return v === 'Cloudflare' || v === 'Manual' ? v : 'None';
+                return v === 'Cloudflare' || v === 'Manual' ? v : 'Http';
             }
 
             function normalizeProvider(value) {
@@ -333,6 +345,13 @@
                 if (value === 2 || value === '2') { return 'Manual'; }
                 if (value === 'Cloudflare' || value === 'Manual') { return value; }
                 return 'None';
+            }
+
+            function proofFromConfig(c) {
+                var dns = c.Challenge === 'Dns' || c.Challenge === 1 || c.Challenge === '1';
+                if (!dns) { return 'Http'; }
+                var provider = normalizeProvider(c.DnsProvider);
+                return provider === 'None' ? 'Http' : provider;
             }
 
             function stepState(el, state) {
@@ -345,11 +364,10 @@
 
             function derive() {
                 var haveAddress = cfg && cfg.Domain && cfg.AccountEmail;
-                var provider = providerValue();
-                var dnsReady = provider === 'Manual'
-                    || (provider === 'Cloudflare' && q('#bpToken').value.trim() !== '');
+                var proof = proofValue();
+                var proofReady = proof !== 'Cloudflare' || q('#bpToken').value.trim() !== '';
                 var certDone = status && status.HasCertificateFile && status.CertificateExpiryUtc && !status.UsingStaging;
-                return { haveAddress: haveAddress, dnsReady: dnsReady, certDone: certDone };
+                return { haveAddress: haveAddress, proofReady: proofReady, certDone: certDone };
             }
 
             function render() {
@@ -358,8 +376,8 @@
                 stepState(q('#bpStep1'), d.haveAddress ? 'done' : 'active');
                 stepState(q('#bpStep2'), !d.haveAddress ? 'locked'
                     : (check && check.DomainMatchesPublicIp ? 'done' : 'active'));
-                stepState(q('#bpStep3'), !d.haveAddress ? 'locked' : (d.dnsReady ? 'done' : 'active'));
-                stepState(q('#bpStep4'), !(d.haveAddress && d.dnsReady) ? 'locked'
+                stepState(q('#bpStep3'), !d.haveAddress ? 'locked' : (d.proofReady ? 'done' : 'active'));
+                stepState(q('#bpStep4'), !(d.haveAddress && d.proofReady) ? 'locked'
                     : (d.certDone ? 'done' : 'active'));
                 stepState(q('#bpStep5'), d.certDone ? 'active' : 'locked');
 
@@ -400,10 +418,14 @@
                     }
                 }
 
-                // Step 3: provider fields
-                var provider = providerValue();
-                q('#bpCloudflareFields').style.display = provider === 'Cloudflare' ? '' : 'none';
-                q('#bpManualNote').style.display = provider === 'Manual' ? '' : 'none';
+                // Step 3: proof-mode fields
+                var proof = proofValue();
+                q('#bpHttpFields').style.display = proof === 'Http' ? '' : 'none';
+                q('#bpCloudflareFields').style.display = proof === 'Cloudflare' ? '' : 'none';
+                q('#bpManualNote').style.display = proof === 'Manual' ? '' : 'none';
+                if (check && check.HttpPort) {
+                    q('#bpHttpPort').textContent = check.HttpPort;
+                }
 
                 // Step 4: progress
                 renderProgress();
@@ -499,16 +521,18 @@
             }
 
             function readForm() {
+                var proof = proofValue();
                 cfg.Domain = q('#bpDomain').value.trim();
                 cfg.AccountEmail = q('#bpEmail').value.trim();
-                cfg.DnsProvider = providerValue();
+                cfg.Challenge = proof === 'Http' ? 'Http' : 'Dns';
+                if (proof !== 'Http') { cfg.DnsProvider = proof; }
                 cfg.DnsApiToken = q('#bpToken').value;
                 cfg.UseStaging = q('#bpUseStaging').checked;
                 cfg.CertificatePath = q('#bpCertPathInput').value.trim();
                 cfg.RenewDaysBeforeExpiry = parseInt(q('#bpRenewDays').value, 10) || 30;
                 cfg.DnsPropagationSeconds = parseInt(q('#bpPropagation').value, 10) || 60;
                 cfg.DirectoryUrl = q('#bpDirectoryUrl').value.trim();
-                if (cfg.Domain && cfg.AccountEmail && cfg.DnsProvider !== 'None') {
+                if (cfg.Domain && cfg.AccountEmail) {
                     cfg.Enabled = true;
                 }
             }
@@ -521,7 +545,7 @@
             function fillForm() {
                 q('#bpDomain').value = cfg.Domain || '';
                 q('#bpEmail').value = cfg.AccountEmail || '';
-                q('#bpProvider').value = normalizeProvider(cfg.DnsProvider);
+                q('#bpProvider').value = proofFromConfig(cfg);
                 q('#bpToken').value = cfg.DnsApiToken || '';
                 q('#bpUseStaging').checked = !!cfg.UseStaging;
                 q('#bpCertPathInput').value = cfg.CertificatePath || '';

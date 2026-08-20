@@ -22,7 +22,7 @@ const stub = () => {
   window.__saved = null;
   window.__state = {
     config: {
-      Domain: '', AccountEmail: '', DnsProvider: 'None', DnsApiToken: '',
+      Domain: '', AccountEmail: '', Challenge: 'Http', DnsProvider: 'None', DnsApiToken: '',
       UseStaging: true, Enabled: false, CertificatePath: '',
       RenewDaysBeforeExpiry: 30, DnsPropagationSeconds: 60, DirectoryUrl: ''
     },
@@ -33,7 +33,7 @@ const stub = () => {
       IsTestRun: false, PendingRecordName: null, PendingRecordValue: null
     },
     check: {
-      Domain: '', PublicIp: '108.194.46.197', ResolvedAddresses: ['1.2.3.4'],
+      Domain: '', PublicIp: '108.194.46.197', HttpPort: 8096, ResolvedAddresses: ['1.2.3.4'],
       DomainMatchesPublicIp: false, ZoneOk: null, ZoneName: null, ZoneError: null
     }
   };
@@ -80,9 +80,16 @@ await page.fill('#bpDomain', 'jellyfin.example.com');
 await page.fill('#bpEmail', 'bob@example.com');
 await page.click('#bpSaveStep1');
 await page.waitForTimeout(300);
-assert((await page.evaluate(() => window.__saved)).Domain === 'jellyfin.example.com', 'config saved on continue');
+const saved1 = await page.evaluate(() => window.__saved);
+assert(saved1.Domain === 'jellyfin.example.com', 'config saved on continue');
+assert(saved1.Challenge === 'Http', 'server proof (HTTP-01) is the saved default');
+assert(saved1.Enabled === true, 'plugin enabled once the address is in');
 assert(await hasClass('#bpStep1', 'bp-done'), 'step 1 done after save');
 assert(await hasClass('#bpStep2', 'bp-active'), 'step 2 unlocks');
+assert(await hasClass('#bpStep3', 'bp-done'), 'step 3 done by default — nothing to create');
+assert(await hasClass('#bpStep4', 'bp-active'), 'step 4 unlocks with zero extra input');
+assert(await page.isVisible('#bpHttpFields'), 'server-proof explanation shown');
+assert((await page.textContent('#bpHttpPort')) === '8096', 'port-80 forward names the real HTTP port');
 const aRecord = await page.textContent('#bpARecord');
 assert(aRecord.includes('108.194.46.197'), 'A record shows detected public IP');
 assert((await page.textContent('#bpDnsCheck')).includes('1.2.3.4'), 'mismatch warning names the wrong IP');
@@ -94,12 +101,13 @@ await page.click('#bpRecheck');
 await page.waitForTimeout(300);
 assert(await hasClass('#bpStep2', 'bp-done'), 'step 2 done when domain matches');
 
-// Manual DNS mode unlocks step 4.
+// Manual DNS fallback also counts as ready.
 await page.selectOption('#bpProvider', 'Manual');
 await page.waitForTimeout(200);
 assert(await hasClass('#bpStep3', 'bp-done'), 'manual mode completes step 3');
-assert(await hasClass('#bpStep4', 'bp-active'), 'step 4 unlocks');
+assert(await hasClass('#bpStep4', 'bp-active'), 'step 4 stays unlocked');
 assert(await page.isVisible('#bpManualNote'), 'manual explanation shown');
+assert(!(await page.isVisible('#bpHttpFields')), 'server-proof text hidden in manual mode');
 
 // Cloudflare mode wants a token.
 await page.selectOption('#bpProvider', 'Cloudflare');
@@ -122,6 +130,8 @@ await page.click('#bpIssue');
 await page.waitForTimeout(500);
 const calls = await page.evaluate(() => window.__calls);
 assert(calls.some(c => c === 'POST /Backporch/Request?guided=true'), 'request POSTed with guided=true');
+const savedManual = await page.evaluate(() => window.__saved);
+assert(savedManual.Challenge === 'Dns' && savedManual.DnsProvider === 'Manual', 'manual choice saved as DNS challenge');
 assert(await page.isVisible('#bpManualRecord'), 'manual TXT card visible');
 const txt = await page.textContent('#bpTxtRecord');
 assert(txt.includes('_acme-challenge.jellyfin.example.com') && txt.includes('digest-abc123'), 'TXT record rendered');

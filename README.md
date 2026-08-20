@@ -25,10 +25,13 @@ things — your domain and an email — and the page walks you through the rest:
 2. **Point it at your server** — the page detects your public IP and shows the
    exact A record to add, with copy buttons, then verifies live that the domain
    resolves to you.
-3. **Prove you own the domain** — either a Cloudflare API token (fully
-   automatic, with a "test the token" check), or **any other DNS host**: the
-   page shows you one TXT record to add by hand when the time comes and waits
-   for you.
+3. **Prove you own the domain** — the recommended way needs **nothing at
+   all**: the certificate authority fetches a proof file straight from this
+   server (the same mechanism GitHub Pages uses for custom domains), and
+   Backporch answers it automatically, now and at every renewal. The only
+   requirement is forwarding port 80 to Jellyfin. Can't open ports? Fall back
+   to a Cloudflare API token (with a "test the token" check), or any other DNS
+   host via a copy-paste TXT record.
 4. **Get your certificate** — one button. A practice run against Let's
    Encrypt's staging service proves the setup without spending production rate
    limits; on success the real certificate is issued immediately. Progress
@@ -41,9 +44,12 @@ things — your domain and an email — and the page walks you through the rest:
 
 1. The plugin registers an ACME account (key generated locally, reused forever,
    valid on staging and production alike).
-2. For each issuance it publishes a `_acme-challenge` TXT record — via the
-   provider API, or by showing it to you in manual mode — waits for
-   propagation, asks the CA to validate, then cleans up.
+2. For each issuance it answers the CA's ownership challenge. By default that
+   is **HTTP-01**: the plugin serves the proof from an anonymous
+   `/.well-known/acme-challenge` route inside Jellyfin itself — zero
+   credentials, fully automatic renewal. Alternatively **DNS-01**: a
+   `_acme-challenge` TXT record via the provider API or your own hands, which
+   needs no inbound connectivity at all.
 3. The certificate and key are written atomically to a PKCS#12 file with
    owner-only permissions. The path defaults to Jellyfin's own data directory;
    no password is set on the bundle — one would have to be stored in plain text
@@ -70,10 +76,12 @@ things — your domain and an email — and the page walks you through the rest:
 ## Requirements
 
 - Jellyfin **10.11.x** (built and tested against 10.11.11).
-- A domain you own, with DNS hosted at a supported provider
-  (currently **Cloudflare**; the provider interface is pluggable).
-- No CGNAT if you want inbound remote access itself (the certificate can be
-  issued regardless — DNS-01 needs no inbound connectivity).
+- A domain you own. Any DNS host works: the default HTTP-01 proof only needs
+  the domain's A record pointing at you plus a port-80 forward; DNS-01 is
+  automatic with Cloudflare (the provider interface is pluggable) or manual
+  anywhere else.
+- No CGNAT if you want inbound remote access itself (a certificate can still
+  be issued regardless — DNS-01 needs no inbound connectivity).
 
 ## Install (manual, until a repository is published)
 
@@ -97,10 +105,13 @@ Against a disposable `jellyfin/jellyfin:10.11.11` container:
 
 And against Let's Encrypt's **Pebble** test CA (real ACME, no real DNS):
 
-- Full issuance end-to-end through the plugin's own code path: account
-  registration, order, DNS-01 challenge, validation, finalize, chain download,
-  and a PKCS#12 on disk with owner-only permissions that matches the hostname.
-  This runs in CI on every push.
+- Full issuance end-to-end through the plugin's own code path — for **both**
+  challenge types: HTTP-01 (a test stand-in serves the answers from the same
+  store the plugin's well-known route uses, and the pipeline is checked to
+  clean up every answer afterwards) and DNS-01. Account registration, order,
+  challenge, validation, finalize, chain download, and a PKCS#12 on disk with
+  owner-only permissions that matches the hostname. This runs in CI on every
+  push.
 
 And the guided setup page itself, in headless Chromium
 (`tests/ui/configpage.test.mjs`, also in CI): step locking and unlocking, the
@@ -113,10 +124,13 @@ API against a live zone.
 
 ## Known limitations
 
-- One domain, one certificate. No wildcard or SAN list yet.
-- Cloudflare is the only *automatic* DNS provider so far; every other host
-  works through manual mode, at the cost of a copy-and-paste per issuance
-  (which includes renewals — automatic renewal needs an API provider).
+- One domain, one certificate. No wildcard or SAN list yet (wildcards would
+  require DNS-01).
+- HTTP-01 needs port 80 reachable from the internet at issuance and renewal
+  time, and assumes Jellyfin is served at the domain's root (no reverse-proxy
+  path prefix in front of the well-known route).
+- Cloudflare is the only *automatic* DNS provider so far; manual DNS mode
+  works anywhere but asks for a fresh copy-paste at every renewal.
 - Jellyfin loads the certificate at startup, so a renewed certificate is
   picked up at the next restart. (A future core contribution could hot-reload
   via Kestrel's certificate selector.)

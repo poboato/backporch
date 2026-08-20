@@ -15,6 +15,7 @@ public class ServiceRegistrator : IPluginServiceRegistrator
     {
         serviceCollection.AddHttpClient();
         serviceCollection.AddSingleton<IssuanceState>();
+        serviceCollection.AddSingleton<HttpChallengeStore>();
         serviceCollection.AddSingleton<AcmeService>();
     }
 }
