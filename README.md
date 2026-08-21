@@ -62,19 +62,71 @@ against — is recorded in [docs/DESIGN.md](docs/DESIGN.md).)
 
 ## Security posture
 
+### What forwarding port 80 actually exposes
+
+The default proof needs the certificate authority to reach
+`http://your-domain/.well-known/acme-challenge/…`, which means forwarding public
+port 80 to Jellyfin's HTTP port. **That forward exposes all of Jellyfin's plain
+HTTP interface to the internet, not just the challenge path** — including the
+login page. Anyone who types `http://your-domain` reaches your server without
+encryption, and credentials sent that way travel in the clear.
+
+Two ways to keep that from being a real weakness, in order of preference:
+
+1. **Turn on Jellyfin's *Require HTTPS*** (Dashboard → Networking) once the
+   first certificate is installed. Port 80 then only ever answers with a
+   redirect to HTTPS. This does not break renewals: Let's Encrypt follows
+   redirects for HTTP-01 — up to ten, to ports 80 or 443 — and deliberately
+   does not validate the certificate it finds there, precisely so this
+   bootstrap works. The first issuance still has to happen over plain HTTP.
+2. **Put a reverse proxy on port 80 that forwards only
+   `/.well-known/acme-challenge/`** to Jellyfin and refuses everything else.
+   Strictest option, and the right one if the server must not answer plain HTTP
+   at all. If you already run a proxy, prefer this.
+
+If neither is acceptable, use the DNS-01 fallback: it needs no inbound port at
+all, at the cost of a DNS credential or a manual record per renewal.
+
+### The rest
+
 - **Disabled by default.** Nothing runs until you turn it on.
 - **Staging CA by default.** First runs go against Let's Encrypt staging, so
   misconfiguration cannot exhaust production rate limits. Switch to production
   only after a staging issuance succeeds.
 - The DNS API token is stored in the plugin configuration on your server and
-  is never written to logs. Scope it as tightly as your provider allows
-  (Cloudflare: *Zone → DNS → Edit* on the single zone).
+  is never written to logs — but it is stored **in clear text**, as Jellyfin
+  plugin settings are, and any Jellyfin administrator can read it back through
+  the dashboard. Scope it to the single zone (Cloudflare: *Zone → Read* plus
+  *Zone → DNS → Edit*, that zone only) so it is worth as little as possible if
+  it leaks. The tokenless default avoids the question entirely.
 - The ACME account key never leaves the server.
-- The PFX is written to a temp file, restricted to `0600`, then moved into
-  place atomically — a reader can never observe a half-written certificate.
+- **The private key is never readable by anyone else, even briefly.** The
+  bundle is created with owner-only permissions from the moment it exists
+  (not chmod-ed afterwards), under an unpredictable name that cannot be
+  pre-empted by a planted symlink, then renamed into place — so a reader can
+  never observe a half-written certificate or catch one at loose permissions.
+  A directory the plugin creates for it is owner-only too.
+- The challenge route is the only anonymous surface, and it can return exactly
+  one thing: an answer to a challenge this server started seconds earlier. Key
+  authorizations are public by design — the proof is in serving one at your
+  domain, not in knowing it.
+- The domain is validated as a hostname before it reaches the resolver, the
+  certificate authority, or the challenge record.
 - All certificate work runs on a scheduled task or an explicit button press,
   never on the playback path.
 - The plugin's API endpoints require an elevated (admin) Jellyfin session.
+
+### Known dependency risk
+
+Certes 3.0.4 (the ACME library, last released early 2024) pulls in
+**Portable.BouncyCastle 1.9.0**, the retired 1.x line. Bouncy Castle for .NET
+before 2.3.1 is affected by **CVE-2024-29857** — excessive CPU use when
+importing an EC certificate with crafted curve parameters. It cannot simply be
+upgraded: the 2.x package is a different assembly, and Certes binds to the old
+one. The practical exposure here is small — the only certificates parsed come
+from the ACME CA over validated TLS, so triggering it would mean being Let's
+Encrypt or breaking TLS to it — but it is a real advisory that a scanner will
+flag, and it is the strongest argument for eventually replacing Certes.
 
 ## Requirements
 

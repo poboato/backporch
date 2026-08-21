@@ -172,6 +172,28 @@ several earlier green CI runs proved nothing. Both `AcmeContext`s now allow
 five retries. Retrying is safe: a rejected request was never processed, so it
 cannot double-issue.
 
+### The private key is created restricted, never restricted afterwards
+Writing the bundle and then `chmod`-ing it leaves a window — however short —
+where a file containing a private key sits at whatever the umask allowed. The
+bundle is now created with `FileStreamOptions.UnixCreateMode` already set, so
+it has never existed at looser permissions. Two details go with it: the
+temporary name is unpredictable and created exclusively (`CreateNew`), because
+the output path is administrator-chosen and may sit somewhere shared — the old
+predictable `<path>.tmp` could be pre-empted with a symlink and the key written
+through it — and a directory the plugin creates for the bundle is made
+owner-only, while a directory that already existed is left alone.
+**Cost of change:** reverting reintroduces a local key-disclosure window that
+no functional test would notice.
+
+### Untrusted input is validated at the door
+The domain reaches the resolver, the CA, and the challenge-record builder, so
+it is checked as a hostname once, up front, rather than trusted downstream —
+which also turns a confusing late failure into one clear message. The public-IP
+lookup is a third-party service, so its response is size-capped and must parse
+as an IPv4 address before it is used or displayed. Everything the setup page
+renders goes through `esc()` or `textContent`; all HTML attributes are
+double-quoted, which is what makes escaping `"` sufficient.
+
 ## Testing strategy, and what it taught
 
 Three CI jobs, all required: unit tests + package, browser UI test, and
@@ -229,3 +251,13 @@ Rough order of value:
    one click inside Jellyfin instead of unzip-by-hand.
 9. **UI polish pass** — wording, error-state styling, accessibility audit of
    the guided flow.
+10. **Replace or vendor Certes** — it is lightly maintained (3.0.4, early 2024)
+    and holds the plugin to the retired Portable.BouncyCastle 1.9.0, which
+    carries CVE-2024-29857. Exposure here is small (the only certificates
+    parsed come from the CA over validated TLS) but it is the one dependency
+    risk that cannot be patched away.
+11. **Write-only handling for the DNS token** — Jellyfin's plugin configuration
+    model hands the whole configuration, token included, to any administrator's
+    browser on every page load and posts it back on every save. Keeping the
+    secret server-side would need a dedicated endpoint rather than the generic
+    configuration save. Only matters for the DNS-01 fallback.

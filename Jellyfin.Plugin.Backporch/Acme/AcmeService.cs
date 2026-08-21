@@ -261,11 +261,15 @@ public sealed class AcmeService
             return "No domain configured.";
         }
 
-        if (config.Domain.Contains('/', StringComparison.Ordinal)
-            || config.Domain.Contains(' ', StringComparison.Ordinal)
-            || !config.Domain.Contains('.', StringComparison.Ordinal))
+        if (!IsValidHostname(config.Domain))
         {
-            return "Domain is not a valid hostname.";
+            return "Domain is not a valid hostname — enter it as a bare name like "
+                + "media.example.com, with no scheme, port, or path.";
+        }
+
+        if (config.Domain.Contains('*', StringComparison.Ordinal))
+        {
+            return "Wildcard certificates are not supported.";
         }
 
         if (string.IsNullOrWhiteSpace(config.AccountEmail))
@@ -292,6 +296,55 @@ public sealed class AcmeService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Whether the value is a syntactically valid DNS hostname of at least two labels.
+    /// </summary>
+    /// <remarks>
+    /// Everything downstream treats this string as a name: it is asked of the resolver,
+    /// sent to the certificate authority, and used to build the challenge record. Refusing
+    /// anything that is not a hostname here keeps a URL, a port, or stray control
+    /// characters from reaching any of them, and gives the user one clear message instead
+    /// of an obscure failure several steps later.
+    /// </remarks>
+    internal static bool IsValidHostname(string domain)
+    {
+        if (string.IsNullOrWhiteSpace(domain) || domain.Length > 253)
+        {
+            return false;
+        }
+
+        var labels = domain.Split('.');
+        if (labels.Length < 2)
+        {
+            return false;
+        }
+
+        foreach (var label in labels)
+        {
+            if (label.Length is 0 or > 63
+                || label.StartsWith('-')
+                || label.EndsWith('-'))
+            {
+                return false;
+            }
+
+            foreach (var c in label)
+            {
+                var ok = c is >= 'a' and <= 'z'
+                    || c is >= 'A' and <= 'Z'
+                    || c is >= '0' and <= '9'
+                    || c == '-';
+
+                if (!ok)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -697,17 +750,62 @@ public sealed class AcmeService
         var parent = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(parent))
         {
+            var existed = System.IO.Directory.Exists(parent);
             System.IO.Directory.CreateDirectory(parent);
+
+            // Only tighten a directory we just made — never re-permission one the
+            // administrator pointed us at and may share with something else.
+            if (!existed && !OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    parent,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
         }
 
-        var temp = path + ".tmp";
-        await File.WriteAllBytesAsync(temp, pfx, cancellationToken).ConfigureAwait(false);
+        // The bundle carries the private key, so it must never exist — even briefly —
+        // at permissions anyone else can read. Creating it with the mode set (rather
+        // than chmod-ing afterwards) closes that window. The name is unpredictable and
+        // creation is exclusive, so nothing can pre-place a symlink for us to write
+        // through, which matters because the output path is administrator-chosen and
+        // may sit in a shared directory.
+        var temp = Path.Combine(
+            string.IsNullOrEmpty(parent) ? "." : parent,
+            "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None
+        };
 
         if (!OperatingSystem.IsWindows())
         {
-            File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         }
 
-        File.Move(temp, path, overwrite: true);
+        try
+        {
+            var stream = new FileStream(temp, options);
+            await using (stream.ConfigureAwait(false))
+            {
+                await stream.WriteAsync(pfx, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            // Rename keeps the mode, and replaces the old bundle in one step, so a
+            // reader never sees a partial certificate.
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
+
+            throw;
+        }
     }
 }

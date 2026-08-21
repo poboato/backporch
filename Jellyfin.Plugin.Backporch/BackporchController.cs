@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Mime;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -140,9 +141,23 @@ public class BackporchController : ControllerBase
         {
             using var client = _httpClientFactory.CreateClient(nameof(BackporchController));
             client.Timeout = TimeSpan.FromSeconds(5);
-            var ip = await client.GetStringAsync(new Uri("https://ipv4.icanhazip.com/"), cancellationToken)
+
+            // A third party answers this, so take as little as possible on trust: cap the
+            // body, and only accept a value that really parses as an IPv4 address rather
+            // than letting an arbitrary string reach the page or the comparison below.
+            client.MaxResponseContentBufferSize = 128;
+            var body = await client.GetStringAsync(new Uri("https://ipv4.icanhazip.com/"), cancellationToken)
                 .ConfigureAwait(false);
-            dto.PublicIp = ip.Trim();
+
+            if (IPAddress.TryParse(body.Trim(), out var parsed)
+                && parsed.AddressFamily == AddressFamily.InterNetwork)
+            {
+                dto.PublicIp = parsed.ToString();
+            }
+            else
+            {
+                _logger.LogWarning("Public IP lookup returned something that is not an IPv4 address");
+            }
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
