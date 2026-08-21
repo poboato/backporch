@@ -5,6 +5,7 @@ using System.Text.Json;
 using Jellyfin.Plugin.Backporch.Acme;
 using Jellyfin.Plugin.Backporch.Configuration;
 using Jellyfin.Plugin.Backporch.Dns;
+using Jellyfin.Plugin.Backporch.Http;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Net;
@@ -29,6 +30,7 @@ public class BackporchController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IServerApplicationHost _appHost;
     private readonly IConfigurationManager _configurationManager;
+    private readonly AcmeHttpServer _httpServer;
     private readonly ILogger<BackporchController> _logger;
 
     /// <summary>
@@ -39,6 +41,7 @@ public class BackporchController : ControllerBase
     /// <param name="httpClientFactory">Factory for the preflight check's HTTP calls.</param>
     /// <param name="appHost">The server host, for its listening ports.</param>
     /// <param name="configurationManager">Server configuration, for the network base URL.</param>
+    /// <param name="httpServer">The plugin's own HTTP listener, for its bound state.</param>
     /// <param name="logger">Logger.</param>
     public BackporchController(
         AcmeService acmeService,
@@ -46,6 +49,7 @@ public class BackporchController : ControllerBase
         IHttpClientFactory httpClientFactory,
         IServerApplicationHost appHost,
         IConfigurationManager configurationManager,
+        AcmeHttpServer httpServer,
         ILogger<BackporchController> logger)
     {
         _acmeService = acmeService;
@@ -53,6 +57,7 @@ public class BackporchController : ControllerBase
         _httpClientFactory = httpClientFactory;
         _appHost = appHost;
         _configurationManager = configurationManager;
+        _httpServer = httpServer;
         _logger = logger;
     }
 
@@ -130,6 +135,9 @@ public class BackporchController : ControllerBase
         {
             Domain = config.Domain,
             HttpPort = _appHost.HttpPort,
+            ChallengeListenerExpectedPort = AcmeHttpServer.WantedPort(config),
+            ChallengeListenerPort = _httpServer.BoundPort,
+            ChallengeListenerError = _httpServer.LastError,
 
             // A base URL makes Jellyfin redirect every unprefixed request to the web
             // client — including the well-known path the CA must fetch, which it is
@@ -302,8 +310,29 @@ public class BackporchCheckDto
     /// <summary>Gets or sets the server's detected public IPv4 address, if reachable.</summary>
     public string? PublicIp { get; set; }
 
-    /// <summary>Gets or sets the port Jellyfin serves plain HTTP on (port-80 forward target).</summary>
+    /// <summary>Gets or sets the port Jellyfin serves plain HTTP on.</summary>
+    /// <remarks>
+    /// Shown so it can be pointed out that this is the port <em>not</em> to forward.
+    /// </remarks>
     public int HttpPort { get; set; }
+
+    /// <summary>
+    /// Gets or sets the port the plugin's own HTTP listener should be holding, or zero
+    /// when it is switched off (a reverse proxy owns port 80 instead).
+    /// </summary>
+    public int ChallengeListenerExpectedPort { get; set; }
+
+    /// <summary>
+    /// Gets or sets the port that listener actually bound, or zero if it is not running.
+    /// </summary>
+    public int ChallengeListenerPort { get; set; }
+
+    /// <summary>
+    /// Gets or sets why the listener is not running, when it should be. A port that
+    /// silently failed to bind is a renewal that fails silently two months later, so this
+    /// is surfaced rather than left in the log.
+    /// </summary>
+    public string? ChallengeListenerError { get; set; }
 
     /// <summary>
     /// Gets or sets Jellyfin's configured base URL. Non-empty means HTTP proof cannot

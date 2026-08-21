@@ -3,18 +3,19 @@ using System.Text;
 using System.Text.Json;
 using Jellyfin.Plugin.Backporch.Acme;
 using Jellyfin.Plugin.Backporch.Configuration;
+using Jellyfin.Plugin.Backporch.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Jellyfin.Plugin.Backporch.Tests;
 
 /// <summary>
-/// Full HTTP-01 issuance against Pebble — the tokenless default path. The test plays
-/// Jellyfin's part: an HTTP listener on Pebble's validation port (5002) answering
-/// from the same <see cref="HttpChallengeStore"/> the service publishes into, while
-/// challtestsrv's DNS points the test domain at this machine. Requires
-/// BACKPORCH_PEBBLE_DIR, BACKPORCH_CHALLTESTSRV, and BACKPORCH_HTTP01_IP (an address
-/// for this host that the Pebble container can reach, e.g. the docker network gateway).
+/// Full HTTP-01 issuance against Pebble — the tokenless default path — through the very
+/// listener the plugin ships. Nothing stands in for the server here: Pebble's validation
+/// request lands on <see cref="AcmeHttpServer"/> itself, on the port Pebble validates
+/// against (5002), while challtestsrv's DNS points the test domain at this machine.
+/// Requires BACKPORCH_PEBBLE_DIR, BACKPORCH_CHALLTESTSRV, and BACKPORCH_HTTP01_IP (an
+/// address for this host that the Pebble container can reach).
 /// </summary>
 [Collection("Pebble")]
 public class PebbleHttpIssuanceTests
@@ -37,6 +38,8 @@ public class PebbleHttpIssuanceTests
         }
 
         const string domain = "http.backporch.test";
+        const int ValidationPort = 5002;
+
         var pfxPath = Path.Combine(Path.GetTempPath(), $"backporch-http01-{Guid.NewGuid():N}.pfx");
         var config = new PluginConfiguration
         {
@@ -44,7 +47,9 @@ public class PebbleHttpIssuanceTests
             Challenge = ChallengeKind.Http,
             Domain = domain,
             AccountEmail = "http@backporch.test",
-            CertificatePath = pfxPath
+            CertificatePath = pfxPath,
+            ChallengeListenPort = ValidationPort,
+            PublicHttpsPort = 443
         };
 
         using var management = new HttpClient();
@@ -62,43 +67,8 @@ public class PebbleHttpIssuanceTests
         var service = new AcmeService(
             NullLogger<AcmeService>.Instance, new SingleClientFactory(), new IssuanceState(), store);
 
-        // Stand in for Jellyfin: serve /.well-known/acme-challenge/{token} from the store,
-        // exactly as the plugin's anonymous controller does.
-        using var listener = new HttpListener();
-        listener.Prefixes.Add("http://*:5002/");
-        listener.Start();
-        var served = new List<string>();
-        var serveLoop = Task.Run(async () =>
-        {
-            while (listener.IsListening)
-            {
-                HttpListenerContext context;
-                try
-                {
-                    context = await listener.GetContextAsync();
-                }
-                catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException)
-                {
-                    return;
-                }
-
-                var token = context.Request.Url!.AbsolutePath.Split('/')[^1];
-                if (context.Request.Url.AbsolutePath.StartsWith("/.well-known/acme-challenge/", StringComparison.Ordinal)
-                    && store.TryGet(token, out var keyAuthorization))
-                {
-                    served.Add(token);
-                    var bytes = Encoding.ASCII.GetBytes(keyAuthorization);
-                    context.Response.ContentType = "text/plain";
-                    context.Response.OutputStream.Write(bytes);
-                }
-                else
-                {
-                    context.Response.StatusCode = 404;
-                }
-
-                context.Response.Close();
-            }
-        });
+        // The shipped listener, on the shipped code path — not a test stand-in.
+        var listener = await AcmeHttpServer.StartForTestAsync(store, () => config, ValidationPort);
 
         var insecureHandler = new HttpClientHandler
         {
@@ -113,23 +83,34 @@ public class PebbleHttpIssuanceTests
 
             Assert.True(File.Exists(pfxPath), "PFX was not written");
             Assert.True(expiry > DateTime.UtcNow.AddDays(1), "expiry not in the future");
-            Assert.NotEmpty(served);
 
             var issued = System.Security.Cryptography.X509Certificates.X509CertificateLoader
                 .LoadPkcs12FromFile(pfxPath, config.CertificatePassword);
             Assert.True(issued.HasPrivateKey, "no private key in PFX");
             Assert.True(issued.MatchesHostname(domain), "certificate does not match the domain");
 
-            // The pipeline must clean up after itself: every served token is gone.
-            foreach (var token in served)
+            // The pipeline must clean up after itself: no answer outlives its authorization.
+            Assert.Equal(0, store.Count);
+
+            // The same socket the certificate authority just used must not be a way into
+            // Jellyfin. This is the property the whole design exists for, checked against
+            // the live listener rather than inferred.
+            using var plain = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
             {
-                Assert.False(store.TryGet(token, out _), "challenge answer left behind after issuance");
-            }
+                BaseAddress = new Uri("http://127.0.0.1:" + ValidationPort)
+            };
+
+            var web = await plain.GetAsync("/web/index.html");
+            Assert.Equal(HttpStatusCode.MovedPermanently, web.StatusCode);
+            Assert.Equal(new Uri("https://" + domain + "/web/index.html"), web.Headers.Location);
+
+            var spent = await plain.GetAsync("/.well-known/acme-challenge/anything");
+            Assert.Equal(HttpStatusCode.NotFound, spent.StatusCode);
         }
         finally
         {
-            listener.Stop();
-            await serveLoop;
+            await listener.StopAsync();
+            listener.Dispose();
             await management.PostAsync(
                 challSrv + "/clear-a",
                 new StringContent(

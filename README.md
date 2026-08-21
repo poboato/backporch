@@ -7,10 +7,16 @@ every scanline where the reference burst lives — the part of the broadcast
 that keeps the picture honest. It is also the door your own household uses.
 
 Bring your own domain; the plugin obtains and renews a Let's Encrypt
-certificate via the **DNS-01** challenge and writes a PKCS#12 bundle that
-Jellyfin serves directly. Because validation happens in DNS, **no inbound port
-is needed to issue a certificate** — only to use it. It works from behind NAT,
-and nothing about your server is exposed during issuance.
+certificate and writes a PKCS#12 bundle that Jellyfin serves directly. By
+default it proves ownership the way GitHub Pages does — the certificate
+authority fetches a proof file from the server itself — so there is **no DNS
+credential anywhere** and renewal is completely hands-off. A DNS-01 fallback
+covers servers that cannot open a port at all.
+
+The point of the exercise is a server that is reachable over HTTPS and nothing
+else. The plugin holds the plain-HTTP port itself so that opening it publishes
+the proof file and a redirect, never Jellyfin — see
+[the security posture](#nothing-of-jellyfin-is-served-over-plain-http).
 
 This is the missing half of "zero-config remote access": the part that is
 honestly achievable as open source, with no vendor infrastructure — you supply
@@ -29,16 +35,18 @@ things — your domain and an email — and the page walks you through the rest:
    all**: the certificate authority fetches a proof file straight from this
    server (the same mechanism GitHub Pages uses for custom domains), and
    Backporch answers it automatically, now and at every renewal. The only
-   requirement is forwarding port 80 to Jellyfin. Can't open ports? Fall back
-   to a Cloudflare API token (with a "test the token" check), or any other DNS
-   host via a copy-paste TXT record.
+   requirement is forwarding port 80 — to Backporch's own listener, which
+   serves the proof and redirects everything else, so the forward never exposes
+   Jellyfin. Can't open ports? Fall back to a Cloudflare API token (with a
+   "test the token" check), or any other DNS host via a copy-paste TXT record.
 4. **Get your certificate** — one button. A practice run against Let's
    Encrypt's staging service proves the setup without spending production rate
    limits; on success the real certificate is issued immediately. Progress
    streams live and survives page reloads — the state lives on the server.
 5. **Turn on HTTPS** — the page hands you the certificate path to paste into
-   **Networking → Custom SSL certificate path** (password stays empty), plus
-   the port-forward note for remote access.
+   **Networking → Custom SSL certificate path** (password stays empty), tells
+   you to tick **Require HTTPS**, and lists the two port forwards that are the
+   entire exposure: 443 for Jellyfin, 80 for the proof listener.
 
 ## How it works
 
@@ -62,30 +70,61 @@ against — is recorded in [docs/DESIGN.md](docs/DESIGN.md).)
 
 ## Security posture
 
-### What forwarding port 80 actually exposes
+### Nothing of Jellyfin is served over plain HTTP
 
-The default proof needs the certificate authority to reach
-`http://your-domain/.well-known/acme-challenge/…`, which means forwarding public
-port 80 to Jellyfin's HTTP port. **That forward exposes all of Jellyfin's plain
-HTTP interface to the internet, not just the challenge path** — including the
-login page. Anyone who types `http://your-domain` reaches your server without
-encryption, and credentials sent that way travel in the clear.
+The certificate authority has to reach
+`http://your-domain/.well-known/acme-challenge/…` over port 80 — that is what
+makes the proof tokenless. The obvious way to arrange it, forwarding port 80 to
+Jellyfin's HTTP port, is also the wrong one: it publishes Jellyfin's entire
+unencrypted interface, login page included, and the forward has to stay open
+forever for renewals. "Turn on Require HTTPS afterwards" does not fix it either,
+because the *first* issuance has no certificate to redirect to yet.
 
-Two ways to keep that from being a real weakness, in order of preference:
+**So Backporch holds port 80 itself.** The plugin opens its own listener, on its
+own socket, with no route to Jellyfin at all. It can produce exactly two
+responses:
 
-1. **Turn on Jellyfin's *Require HTTPS*** (Dashboard → Networking) once the
-   first certificate is installed. Port 80 then only ever answers with a
-   redirect to HTTPS. This does not break renewals: Let's Encrypt follows
-   redirects for HTTP-01 — up to ten, to ports 80 or 443 — and deliberately
-   does not validate the certificate it finds there, precisely so this
-   bootstrap works. The first issuance still has to happen over plain HTTP.
-2. **Put a reverse proxy on port 80 that forwards only
-   `/.well-known/acme-challenge/`** to Jellyfin and refuses everything else.
-   Strictest option, and the right one if the server must not answer plain HTTP
-   at all. If you already run a proxy, prefer this.
+- the key authorization for a challenge this server started seconds ago — a
+  value that is public by design, and useless to anyone else; and
+- `301` to `https://your-domain…` for every other request, on every method and
+  path, with an empty body.
 
-If neither is acceptable, use the DNS-01 fallback: it needs no inbound port at
-all, at the cost of a DNS credential or a manual record per renewal.
+That is the whole vocabulary. `http://your-domain/web/index.html` gets a
+redirect. So does `/System/Info/Public`, which on Jellyfin's own port answers
+unauthenticated with the server's name and version. There is no configuration
+mistake that turns this listener into a way in, because there is nothing behind
+it to get to.
+
+What this asks of you: forward public port **443** to Jellyfin's HTTPS port, and
+public port **80** to the port Backporch is listening on. **Do not forward
+Jellyfin's HTTP port (8096) at all.** Then turn on Jellyfin's **Require HTTPS**
+as well, so that even inside your network nothing is served unencrypted.
+
+If the server cannot bind port 80 — an unprivileged container, or something else
+already holding it — set a different listen port under Advanced and forward the
+router's port 80 there. If the bind fails anyway, the setup page says so with
+the reason, rather than leaving you to find out when a renewal fails two months
+later.
+
+Prefer to keep your existing reverse proxy in front? Turn the listener off and
+have the proxy forward only `/.well-known/acme-challenge/` through to Jellyfin,
+where the plugin's anonymous route answers it. Or avoid inbound HTTP entirely
+with the DNS-01 fallback, at the cost of a DNS credential or a manual record per
+renewal.
+
+### Strict Transport Security
+
+A browser that is redirected to HTTPS still made one plain-HTTP request to be
+told so, and that first request is the one someone on the path can answer
+instead. With HSTS on (the default), Jellyfin's HTTPS responses carry
+`Strict-Transport-Security`, and after a single visit the browser stops trying
+HTTP for your domain altogether — and stops letting anyone click through a
+certificate warning for it.
+
+The lifetime defaults to 180 days rather than the customary year, because a
+browser cannot be told to forget early: the promise is also how long a mistake
+would last. `includeSubDomains` and `preload` are deliberately never sent, since
+both make promises about names this plugin does not own.
 
 ### The rest
 
@@ -109,7 +148,12 @@ all, at the cost of a DNS credential or a manual record per renewal.
 - The challenge route is the only anonymous surface, and it can return exactly
   one thing: an answer to a challenge this server started seconds earlier. Key
   authorizations are public by design — the proof is in serving one at your
-  domain, not in knowing it.
+  domain, not in knowing it. Anything not shaped like an ACME token is refused
+  before the lookup happens.
+- The plain-HTTP listener never reflects your request back at you: the host in
+  every redirect is the domain you configured, not the `Host` header you sent,
+  so it cannot be used as an open redirect. It advertises no `Server` header,
+  accepts no request body, and holds a connection for at most fifteen seconds.
 - The domain is validated as a hostname before it reaches the resolver, the
   certificate authority, or the challenge record.
 - All certificate work runs on a scheduled task or an explicit button press,
@@ -157,13 +201,22 @@ Against a disposable `jellyfin/jellyfin:10.11.11` container:
 - The configuration page serves (`/web/ConfigurationPage`).
 - The issuance service executes end-to-end up to its validation gate and
   persists attempt state.
+- The plain-HTTP listener binds inside the container and answers on its own
+  port: `/` and `/web/index.html` and `/System/Info/Public` all come back `301`
+  with an empty body and no `Server` header, and the challenge path `404`s when
+  no proof is live. Changing the port from the plugin API rebinds it live — the
+  old port stops answering and the new one starts, with no restart.
+- With HTTPS enabled, `Strict-Transport-Security` is present on Jellyfin's own
+  responses — API, static files, and 404s alike, including the early
+  "server is loading" reply — and absent over plain HTTP.
 
 And against Let's Encrypt's **Pebble** test CA (real ACME, no real DNS):
 
 - Full issuance end-to-end through the plugin's own code path — for **both**
-  challenge types: HTTP-01 (a test stand-in serves the answers from the same
-  store the plugin's well-known route uses, and the pipeline is checked to
-  clean up every answer afterwards) and DNS-01. Account registration, order,
+  challenge types: HTTP-01, where Pebble's validation request lands on the
+  shipped listener itself rather than a test stand-in (and the same socket is
+  then checked to redirect `/web/index.html` and to have kept no answer behind),
+  and DNS-01. Account registration, order,
   challenge, validation, finalize, chain download, and a PKCS#12 on disk with
   owner-only permissions that matches the hostname. This runs in CI on every
   push.
@@ -189,6 +242,9 @@ API against a live zone.
 - HTTP-01 needs port 80 reachable from the internet at issuance and renewal
   time, and assumes Jellyfin is served at the domain's root (no reverse-proxy
   path prefix in front of the well-known route).
+- Binding port 80 needs the privilege to do so. The official Jellyfin container
+  has it; a server running as an unprivileged user does not, and should forward
+  the router's port 80 to an unprivileged port set under Advanced.
 - HTTP-01 also requires Jellyfin's **Base URL** setting to be empty: with one
   set, the server redirects the challenge path away from the plugin. The setup
   page detects this and says so.

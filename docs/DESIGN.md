@@ -194,6 +194,64 @@ as an IPv4 address before it is used or displayed. Everything the setup page
 renders goes through `esc()` or `textContent`; all HTML attributes are
 double-quoted, which is what makes escaping `"` sufficient.
 
+### The plugin owns port 80, so that opening it does not open Jellyfin
+The tokenless proof needs port 80 reachable from the internet, and the obvious
+way to arrange that — forward it to Jellyfin's HTTP port — publishes Jellyfin's
+entire unencrypted interface, login page included, permanently, since the
+forward has to stay open for renewals. Two mitigations were considered and both
+found wanting. *Require HTTPS* cannot cover the **first** issuance, because
+there is no certificate to redirect to yet; and telling every user to stand up a
+reverse proxy just to expose one path is not a default, it is a project.
+
+So the plugin binds the port itself, on a Kestrel host of its own with no route
+into Jellyfin. Its entire vocabulary is a challenge answer or a `301`, and the
+guarantee is structural rather than configural: there is nothing behind the
+socket to reach. `/System/Info/Public` — unauthenticated on Jellyfin's own port
+— returns a redirect with an empty body here.
+
+Details that are load-bearing rather than incidental:
+- **Kestrel, not a hand-rolled listener.** This socket faces the open internet;
+  writing our own HTTP parsing for it would be the least defensible line in the
+  project. Limits and timeouts are set tight — no request body, 15-second
+  header and keep-alive timeouts, 100 concurrent connections — because the only
+  legitimate caller sends a handful of small GETs every couple of months.
+- **The redirect host is the configured domain, never the `Host` header.** An
+  unauthenticated internet-facing port that reflects its input into `Location`
+  is an open redirect.
+- **`301` for GET/HEAD, `308` otherwise**, so a client retrying a POST is not
+  silently downgraded into a GET with the body dropped.
+- **The port is configurable and separate from the public one**, since a server
+  that cannot bind 1–1023 should forward the router's port 80 to something
+  unprivileged. A failed bind is reported on the setup page with the reason —
+  otherwise it is invisible until a renewal fails months later.
+- **Not gated on `Enabled`.** The listener must already be answering before the
+  first issuance runs; a domain typed into step one is the trigger.
+- `PreventHostingStartup` and an empty `HostingStartupAssemblies` are both set.
+  Calling `Configure` names this assembly as the web host's "application", and
+  the host then tries to `Assembly.Load` it by name — which fails for a plugin
+  loaded from an unprobed path and logs `Startup assembly ... failed to execute`
+  on every server start. Harmless, and indistinguishable from a broken plugin to
+  anyone reading the log. Found only by running it in a real container.
+**Cost of change:** pointing the forward at Jellyfin again re-exposes the whole
+plain-HTTP interface, permanently and for every user.
+
+### HSTS is on by default, at six months, with no `includeSubDomains`
+A browser redirected to HTTPS still made one plain-HTTP request to be told so,
+and that request is the one an attacker on the path answers instead. HSTS closes
+it for every visit after the first. A plugin's only seam into Jellyfin's request
+pipeline is an `IStartupFilter`, which does work — verified in a real container,
+where the header appears on API responses, static files and 404s alike,
+including the early "server is loading" reply, and never over plain HTTP. The
+header is set from an `OnStarting` callback precisely so that a response reset
+further down the pipeline cannot drop it.
+
+Six months rather than the usual year because the promise cannot be withdrawn
+from a browser that has already heard it: the lifetime is also how long a
+mistake lasts. `includeSubDomains` and `preload` are never sent — both make
+promises about names this plugin neither owns nor can verify.
+**Cost of change:** turning it off is safe; *shortening* it does not reach
+browsers that already cached the longer value.
+
 ## Testing strategy, and what it taught
 
 Three CI jobs, all required: unit tests + package, browser UI test, and
@@ -210,8 +268,12 @@ end-to-end issuance against a real ACME implementation.
     the plugin is wrong.
   - challtestsrv runs its **own** HTTP-01 responder on port 5002 by default;
     pass `-http01 ""` or the test's listener gets "address already in use".
-  - Pebble validates HTTP-01 on port **5002**, not 80 — the test serves the
-    store through a plain `HttpListener` there.
+  - Pebble validates HTTP-01 on port **5002**, not 80 — so the test binds the
+    *shipped* listener there. Pebble's validation request therefore lands on
+    production code, and the same socket is then checked to redirect
+    `/web/index.html` and to have kept no answer behind. An earlier version used
+    a hand-written `HttpListener` stand-in, which proved the store worked and
+    nothing about the thing users actually run.
 - **Headless Chromium** (`tests/ui/configpage.test.mjs`) drives the real
   configPage.html against a stubbed `ApiClient`/`Dashboard`: step locking,
   A-record display, live checks, all three proof modes, the manual-TXT
@@ -221,7 +283,15 @@ end-to-end issuance against a real ACME implementation.
 - **Disposable Jellyfin container** proves what unit tests can't: the
   assembly loads against the real server, routes register (`openapi.json`),
   the elevation policy holds, and the well-known route is anonymous
-  (404-vs-401 is the discriminating observation).
+  (404-vs-401 is the discriminating observation). It is also the only thing
+  that can prove the two host seams work at all — that Jellyfin starts a
+  plugin-registered `IHostedService`, and honours a plugin-registered
+  `IStartupFilter` — and it earned its keep by catching the hosting-startup
+  exception above, which every unit test was blind to.
+  - Two traps when seeding one by hand: the plugin's configuration file is
+    named after the **assembly** (`Jellyfin.Plugin.Backporch.xml`), not the
+    plugin, so a file named `Backporch.xml` is silently ignored; and the config
+    directory is written as root, so replacing a file there needs `docker cp`.
 
 ## Polish roadmap (not yet done)
 

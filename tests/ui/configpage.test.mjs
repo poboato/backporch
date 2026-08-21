@@ -34,7 +34,8 @@ const stub = () => {
     },
     check: {
       Domain: '', PublicIp: '108.194.46.197', HttpPort: 8096, ResolvedAddresses: ['1.2.3.4'],
-      DomainMatchesPublicIp: false, ZoneOk: null, ZoneName: null, ZoneError: null
+      DomainMatchesPublicIp: false, ZoneOk: null, ZoneName: null, ZoneError: null,
+      ChallengeListenerExpectedPort: 80, ChallengeListenerPort: 80, ChallengeListenerError: null
     }
   };
   window.ApiClient = {
@@ -98,7 +99,11 @@ assert(await hasClass('#bpStep2', 'bp-active'), 'step 2 unlocks');
 assert(await hasClass('#bpStep3', 'bp-done'), 'step 3 done by default — nothing to create');
 assert(await hasClass('#bpStep4', 'bp-active'), 'step 4 unlocks with zero extra input');
 assert(await page.isVisible('#bpHttpFields'), 'server-proof explanation shown');
-assert((await page.textContent('#bpHttpPort')) === '8096', 'port-80 forward names the real HTTP port');
+assert((await page.textContent('#bpHttpPort')) === '8096', 'names the Jellyfin HTTP port not to forward');
+const httpFields = await page.textContent('#bpHttpFields');
+assert(httpFields.includes("does not expose Jellyfin"), 'the port-80 forward is explained as safe');
+assert((await page.textContent('#bpListenerStatus')).includes('Listening on port 80'),
+  'listener reported as holding its port');
 const aRecord = await page.textContent('#bpARecord');
 assert(aRecord.includes('108.194.46.197'), 'A record shows detected public IP');
 assert((await page.textContent('#bpDnsCheck')).includes('1.2.3.4'), 'mismatch warning names the wrong IP');
@@ -205,6 +210,34 @@ await page.waitForTimeout(400);
 assert(await page.isVisible('#bpBaseUrlWarning'), 'base URL warning shown for HTTP proof');
 const warnText = await page.textContent('#bpBaseUrlWarning');
 assert(warnText.includes('/jellyfin'), 'warning names the configured base URL');
+
+// A port that failed to bind is silent until a renewal fails months later, so the page
+// has to say it out loud, with the reason.
+await page.evaluate(() => {
+  window.__state.check = Object.assign({}, window.__state.check, {
+    ChallengeListenerPort: 0,
+    ChallengeListenerExpectedPort: 80,
+    ChallengeListenerError: 'Port 80 is privileged, and this server is not running as root.'
+  });
+});
+await page.click('#bpRecheck');
+await page.waitForTimeout(400);
+const listenText = await page.textContent('#bpListenerStatus');
+assert(listenText.includes('is not open'), 'a failed bind is reported');
+assert(listenText.includes('privileged'), 'the failed bind explains itself');
+
+// The HTTP-port settings must round-trip, including a deliberate zero.
+await page.evaluate(() => { document.querySelector('details.bp-advanced').open = true; });
+await page.fill('#bpListenPortInput', '8080');
+await page.fill('#bpHttpsPortInput', '8920');
+await page.fill('#bpHstsDays', '0');
+await page.click('#bpSaveAdvanced');
+await page.waitForTimeout(300);
+const advanced = await page.evaluate(() => window.__state.config);
+assert(advanced.ChallengeListenPort === 8080, 'listen port saved');
+assert(advanced.PublicHttpsPort === 8920, 'public HTTPS port saved');
+assert(advanced.HstsMaxAgeDays === 0, 'a deliberate zero is not replaced by the default');
+assert(advanced.ServeHttpRedirect === true, 'the listener stays on by default');
 
 await browser.close();
 if (errors.length) {

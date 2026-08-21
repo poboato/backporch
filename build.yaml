@@ -22,4 +22,7 @@ artifacts:
 changelog: |
   Initial release: guided setup page, tokenless HTTP-01 issuance by default with
   DNS-01 (Cloudflare or manual) as a fallback, staging-first defaults, daily
-  renewal task, admin-only API and configuration page.
+  renewal task, admin-only API and configuration page. The plain-HTTP port is
+  answered by the plugin's own listener, which serves the ownership proof and
+  redirects everything else to HTTPS, so opening it never exposes the server;
+  HTTPS responses carry Strict-Transport-Security.

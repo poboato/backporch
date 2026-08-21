@@ -41,4 +41,11 @@ public sealed class HttpChallengeStore
     /// </summary>
     /// <param name="token">The challenge token.</param>
     public void Remove(string token) => _answers.TryRemove(token, out _);
+
+    /// <summary>
+    /// Gets how many answers are currently published. Exists so tests can assert the
+    /// pipeline leaves nothing behind — an answer that outlives its authorization is a
+    /// value served to the internet for no reason.
+    /// </summary>
+    internal int Count => _answers.Count;
 }

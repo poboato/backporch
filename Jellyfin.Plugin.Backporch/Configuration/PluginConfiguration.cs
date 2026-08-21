@@ -122,6 +122,52 @@ public class PluginConfiguration : BasePluginConfiguration
     public string CertificatePassword { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets a value indicating whether the plugin opens the public HTTP port
+    /// itself, serving the certificate authority's proof request and redirecting every
+    /// other request to HTTPS.
+    /// </summary>
+    /// <remarks>
+    /// On by default, and the reason a port-80 forward is safe: the forward reaches this
+    /// listener, which has no route to any Jellyfin content, instead of reaching Jellyfin's
+    /// own unencrypted interface. Turn it off only when something else already owns port 80
+    /// &#8212; a reverse proxy that forwards <c>/.well-known/acme-challenge/</c> through to
+    /// Jellyfin, where the plugin's anonymous route answers it instead.
+    /// </remarks>
+    public bool ServeHttpRedirect { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the local port that listener binds. Default 80.
+    /// </summary>
+    /// <remarks>
+    /// This is the port on <em>this</em> machine, which need not be the public one: a server
+    /// that cannot bind privileged ports should forward the router's port 80 to an
+    /// unprivileged port and name it here.
+    /// </remarks>
+    public int ChallengeListenPort { get; set; } = 80;
+
+    /// <summary>
+    /// Gets or sets the public HTTPS port devices connect to, used to build redirects.
+    /// Default 443.
+    /// </summary>
+    public int PublicHttpsPort { get; set; } = 443;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether Jellyfin's HTTPS responses carry a
+    /// <c>Strict-Transport-Security</c> header, telling browsers never to try plain HTTP
+    /// for this domain again.
+    /// </summary>
+    public bool EnableHsts { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets how long, in days, browsers should remember that promise. Default 180.
+    /// </summary>
+    /// <remarks>
+    /// A browser cannot be told to forget early, so this is also how long a mistake would
+    /// last. Six months is long enough to be protective and short enough to recover from.
+    /// </remarks>
+    public int HstsMaxAgeDays { get; set; } = 180;
+
+    /// <summary>
     /// Gets or sets the PEM-encoded ACME account key. Generated on first registration and
     /// reused thereafter so the account is not re-created on every run.
     /// </summary>

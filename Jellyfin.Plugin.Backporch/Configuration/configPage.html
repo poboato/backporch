@@ -169,8 +169,16 @@
                         Let's Encrypt fetches a proof file straight from this server — Backporch
                         answers it for you, now and at every renewal. Nothing to create, nothing to
                         copy. The one requirement: forward TCP port <strong>80</strong> on your
-                        router to this machine's HTTP port (<strong id="bpHttpPort">8096</strong>).
+                        router to port <strong id="bpListenPort">80</strong> on this machine.
                         Can't open port 80? Pick a DNS option instead.
+                        <p style="margin-top:0.8em;">
+                            <strong>That forward does not expose Jellyfin.</strong> Backporch holds
+                            that port on a listener of its own, which can serve the proof file and
+                            nothing else; every other request gets a redirect to HTTPS. Jellyfin's
+                            own HTTP port (<strong id="bpHttpPort">8096</strong>) stays where it is
+                            — <em>don't</em> forward it.
+                        </p>
+                        <p id="bpListenerStatus" style="margin-top:0.8em;"></p>
                         <p id="bpBaseUrlWarning" class="bp-warn" style="display:none;"></p>
                     </div>
                     <div id="bpCloudflareFields" style="display:none;">
@@ -238,6 +246,8 @@
                         <li>Paste this into <strong>Custom SSL certificate path</strong> (leave the password empty):
                             <div id="bpCertPath" class="bp-record"></div>
                         </li>
+                        <li>Tick <strong>Require HTTPS</strong>. Jellyfin then refuses to serve
+                            anything over plain HTTP, on any port, to anyone.</li>
                         <li>Save, then restart Jellyfin.</li>
                     </ol>
                     <p class="fieldDescription">
@@ -245,6 +255,16 @@
                         on your router to this machine's HTTPS port (<strong>8920</strong> by default) —
                         then <span id="bpFinalUrl"><code>https://your-domain</code></span> works everywhere.
                         Renewal is automatic from here; a renewed certificate is picked up at the next restart.
+                    </p>
+                    <p class="fieldDescription" style="margin-top:1em;">
+                        <strong>Before you open this to the internet</strong>, two forwards is the
+                        whole list: <strong>443</strong> for Jellyfin over TLS, and
+                        <strong>80</strong> for Backporch's proof listener. Anything else — Jellyfin's
+                        own <span id="bpHttpPortFinal">8096</span> above all — should not be reachable
+                        from outside. Then check the rest of the front door: a strong password on
+                        every account that can log in, <strong>Dashboard &rarr; Users</strong> pruned
+                        of anything you don't recognise, and remote access left off for accounts that
+                        don't need it.
                     </p>
                 </div>
             </div>
@@ -278,6 +298,55 @@
                         <label class="inputLabel inputLabelUnfocused" for="bpDirectoryUrl">ACME directory URL override</label>
                         <input is="emby-input" type="text" id="bpDirectoryUrl" autocomplete="off" />
                         <div class="fieldDescription">For alternative certificate authorities. Leave empty for Let's Encrypt.</div>
+                    </div>
+
+                    <h3 class="checkboxListLabel" style="margin-top:1.5em;">The plain-HTTP port</h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input is="emby-checkbox" type="checkbox" id="bpServeHttp" />
+                            <span>Answer the plain-HTTP port with Backporch's own listener</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">
+                            On, this is what makes forwarding port 80 safe: the listener serves the
+                            certificate authority's proof file and redirects everything else to
+                            HTTPS, and has no route to Jellyfin at all. Turn it off only if
+                            something else already owns port 80 and forwards
+                            <code>/.well-known/acme-challenge/</code> through to Jellyfin.
+                        </div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpListenPortInput">Port to listen on</label>
+                        <input is="emby-input" type="number" id="bpListenPortInput" min="1" max="65535" />
+                        <div class="fieldDescription">
+                            The port on <em>this</em> machine, which need not be the public one. If
+                            this server can't bind privileged ports, forward the router's port 80 to
+                            something like 8080 and put that number here.
+                        </div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpHttpsPortInput">Public HTTPS port</label>
+                        <input is="emby-input" type="number" id="bpHttpsPortInput" min="1" max="65535" />
+                        <div class="fieldDescription">Where those redirects point. 443 unless you forward a different port.</div>
+                    </div>
+
+                    <h3 class="checkboxListLabel" style="margin-top:1.5em;">Strict Transport Security</h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input is="emby-checkbox" type="checkbox" id="bpHsts" />
+                            <span>Tell browsers never to use plain HTTP for this domain</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">
+                            After one visit over HTTPS, browsers stop trying HTTP for your domain
+                            altogether — so the one plain request that would otherwise be redirected
+                            never happens, and nobody can click through a certificate warning.
+                            <span class="bp-warn">A browser cannot be told to forget early:</span>
+                            the promise below is also how long a mistake would last.
+                        </div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpHstsDays">Remember for (days)</label>
+                        <input is="emby-input" type="number" id="bpHstsDays" min="1" max="730" />
+                        <div class="fieldDescription">180 by default. Set 0 to send nothing.</div>
                     </div>
                     <button is="emby-button" type="button" id="bpSaveAdvanced" class="raised emby-button"><span>Save advanced settings</span></button>
                     <button is="emby-button" type="button" id="bpRequestRaw" class="raised emby-button"><span>Request once, no practice run</span></button>
@@ -435,6 +504,30 @@
                 q('#bpManualNote').style.display = proof === 'Manual' ? '' : 'none';
                 if (check && check.HttpPort) {
                     q('#bpHttpPort').textContent = check.HttpPort;
+                    q('#bpHttpPortFinal').textContent = check.HttpPort;
+                }
+                q('#bpListenPort').textContent = (cfg && cfg.ChallengeListenPort) || 80;
+
+                // Whether the listener is actually holding its port. A bind that failed is
+                // invisible until a renewal fails two months later, so it is said here.
+                var listen = q('#bpListenerStatus');
+                if (!check) {
+                    listen.textContent = '';
+                } else if (check.ChallengeListenerPort) {
+                    listen.innerHTML = '<span class="bp-ok">✓ Listening on port '
+                        + esc(String(check.ChallengeListenerPort))
+                        + ' — ready for the certificate authority.</span>';
+                } else if (check.ChallengeListenerExpectedPort) {
+                    listen.innerHTML = '<span class="bp-warn">Port '
+                        + esc(String(check.ChallengeListenerExpectedPort))
+                        + ' is not open. ' + esc(check.ChallengeListenerError || '')
+                        + '</span>';
+                } else if (cfg && cfg.ServeHttpRedirect === false) {
+                    listen.innerHTML = '<span class="bp-warn">Backporch is not holding the '
+                        + 'plain-HTTP port — whatever does must forward '
+                        + '/.well-known/acme-challenge/ through to Jellyfin.</span>';
+                } else {
+                    listen.textContent = '';
                 }
 
                 // A base URL makes Jellyfin redirect the proof path to the web client, so
@@ -572,6 +665,14 @@
                 cfg.RenewDaysBeforeExpiry = parseInt(q('#bpRenewDays').value, 10) || 30;
                 cfg.DnsPropagationSeconds = parseInt(q('#bpPropagation').value, 10) || 60;
                 cfg.DirectoryUrl = q('#bpDirectoryUrl').value.trim();
+                cfg.ServeHttpRedirect = q('#bpServeHttp').checked;
+                cfg.ChallengeListenPort = parseInt(q('#bpListenPortInput').value, 10) || 80;
+                cfg.PublicHttpsPort = parseInt(q('#bpHttpsPortInput').value, 10) || 443;
+                cfg.EnableHsts = q('#bpHsts').checked;
+                // parseInt of '0' is 0, which is falsy — so a deliberate 0 (send nothing)
+                // must not fall through to the default the way an empty box does.
+                var hstsDays = parseInt(q('#bpHstsDays').value, 10);
+                cfg.HstsMaxAgeDays = isNaN(hstsDays) ? 180 : hstsDays;
                 if (cfg.Domain && cfg.AccountEmail) {
                     cfg.Enabled = true;
                 }
@@ -601,6 +702,11 @@
                 q('#bpRenewDays').value = cfg.RenewDaysBeforeExpiry || 30;
                 q('#bpPropagation').value = cfg.DnsPropagationSeconds || 60;
                 q('#bpDirectoryUrl').value = cfg.DirectoryUrl || '';
+                q('#bpServeHttp').checked = cfg.ServeHttpRedirect !== false;
+                q('#bpListenPortInput').value = cfg.ChallengeListenPort || 80;
+                q('#bpHttpsPortInput').value = cfg.PublicHttpsPort || 443;
+                q('#bpHsts').checked = cfg.EnableHsts !== false;
+                q('#bpHstsDays').value = typeof cfg.HstsMaxAgeDays === 'number' ? cfg.HstsMaxAgeDays : 180;
             }
 
             // Number the dots once so stepState can restore them.
