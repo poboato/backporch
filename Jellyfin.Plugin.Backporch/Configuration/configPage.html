@@ -171,6 +171,7 @@
                         copy. The one requirement: forward TCP port <strong>80</strong> on your
                         router to this machine's HTTP port (<strong id="bpHttpPort">8096</strong>).
                         Can't open port 80? Pick a DNS option instead.
+                        <p id="bpBaseUrlWarning" class="bp-warn" style="display:none;"></p>
                     </div>
                     <div id="bpCloudflareFields" style="display:none;">
                         <div class="inputContainer">
@@ -178,8 +179,13 @@
                             <input is="emby-input" type="password" id="bpToken" autocomplete="off" />
                             <div class="fieldDescription">
                                 <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener noreferrer">Create
-                                one here</a> using Cloudflare's built-in <strong>Edit zone DNS</strong> template,
-                                limited to this one zone. It stays on this server and is never written to logs.
+                                one here</a> → <strong>Create Custom Token</strong>, with two
+                                permissions: <strong>Zone → Zone → Read</strong> and
+                                <strong>Zone → DNS → Edit</strong>, limited to this one zone.
+                                (Both are needed: the first to find your zone, the second to write
+                                the challenge record. The "Edit zone DNS" template grants only the
+                                second and will not work on its own.) It stays on this server and is
+                                never written to logs.
                             </div>
                         </div>
                         <button is="emby-button" type="button" id="bpTestToken" class="raised emby-button"><span>Test the token</span></button>
@@ -187,8 +193,11 @@
                     </div>
                     <div id="bpManualNote" class="fieldDescription" style="display:none;">
                         No token needed. In the next step this page will show you one TXT record to
-                        add by hand — with copy buttons — and wait for you. (Renewals ask again,
-                        so the automatic options are less work over time.)
+                        add by hand — with copy buttons — and wait for you.
+                        <span class="bp-warn">Renewals cannot run unattended in this mode:</span>
+                        every renewal needs you back on this page to publish a new record, so the
+                        scheduled task will skip it rather than fail silently. The automatic
+                        options renew on their own.
                     </div>
                 </div>
             </div>
@@ -283,6 +292,7 @@
             var pluginId = 'ec59d7bc-0644-4bfe-a924-b6ec7b88c1fb';
             var page = document.querySelector('#BackporchConfigPage');
             var cfg = null;
+            var stagingTouched = false;
             var status = null;
             var check = null;
             var pollTimer = null;
@@ -427,6 +437,20 @@
                     q('#bpHttpPort').textContent = check.HttpPort;
                 }
 
+                // A base URL makes Jellyfin redirect the proof path to the web client, so
+                // the CA can never read it. Say so here rather than letting issuance fail
+                // with an opaque validation error.
+                var baseWarn = q('#bpBaseUrlWarning');
+                if (check && check.BaseUrl) {
+                    baseWarn.textContent = 'Heads up: this server has a base URL set ('
+                        + check.BaseUrl + ') under Networking, which redirects the proof '
+                        + 'file away from where the certificate authority looks for it. '
+                        + 'Clear the base URL, or choose one of the DNS options below.';
+                    baseWarn.style.display = '';
+                } else {
+                    baseWarn.style.display = 'none';
+                }
+
                 // Step 4: progress
                 renderProgress();
 
@@ -496,9 +520,22 @@
                     url: ApiClient.getUrl('Backporch/Status'),
                     dataType: 'json'
                 }).then(function (s) {
+                    var finished = status && status.Running && !s.Running;
                     status = s;
                     if (s.Running) { startPolling(); } else { stopPolling(); }
                     render();
+
+                    // A finished run has written to the configuration (account key,
+                    // staging flag, expiry). Pick those up so the form reflects them.
+                    if (finished) {
+                        return ApiClient.getPluginConfiguration(pluginId).then(function (fresh) {
+                            cfg = fresh;
+                            fillForm();
+                            render();
+                            return s;
+                        });
+                    }
+
                     return s;
                 });
             }
@@ -527,7 +564,10 @@
                 cfg.Challenge = proof === 'Http' ? 'Http' : 'Dns';
                 if (proof !== 'Http') { cfg.DnsProvider = proof; }
                 cfg.DnsApiToken = q('#bpToken').value;
-                cfg.UseStaging = q('#bpUseStaging').checked;
+                // The server clears this flag itself once a practice run proves the setup.
+                // Writing the checkbox back unconditionally would undo that with whatever
+                // the box happened to show, so it only counts once the user moves it.
+                if (stagingTouched) { cfg.UseStaging = q('#bpUseStaging').checked; }
                 cfg.CertificatePath = q('#bpCertPathInput').value.trim();
                 cfg.RenewDaysBeforeExpiry = parseInt(q('#bpRenewDays').value, 10) || 30;
                 cfg.DnsPropagationSeconds = parseInt(q('#bpPropagation').value, 10) || 60;
@@ -537,9 +577,17 @@
                 }
             }
 
+            // The server writes to this same configuration — the account key when it
+            // registers, the staging flag once a practice run proves the setup, the
+            // certificate expiry. Saving the copy fetched at page load would hand those
+            // back as they were and undo them, so every save starts from a fresh read and
+            // only overwrites the fields this form owns.
             function saveConfig() {
-                readForm();
-                return ApiClient.updatePluginConfiguration(pluginId, cfg);
+                return ApiClient.getPluginConfiguration(pluginId).then(function (fresh) {
+                    cfg = fresh;
+                    readForm();
+                    return ApiClient.updatePluginConfiguration(pluginId, cfg);
+                });
             }
 
             function fillForm() {
@@ -548,6 +596,7 @@
                 q('#bpProvider').value = proofFromConfig(cfg);
                 q('#bpToken').value = cfg.DnsApiToken || '';
                 q('#bpUseStaging').checked = !!cfg.UseStaging;
+                stagingTouched = false;
                 q('#bpCertPathInput').value = cfg.CertificatePath || '';
                 q('#bpRenewDays').value = cfg.RenewDaysBeforeExpiry || 30;
                 q('#bpPropagation').value = cfg.DnsPropagationSeconds || 60;
@@ -597,6 +646,10 @@
                         out.innerHTML = '<span class="bp-err">✗ The check did not run — is the token filled in?</span>';
                     }
                 });
+            });
+
+            q('#bpUseStaging').addEventListener('change', function () {
+                stagingTouched = true;
             });
 
             function requestCertificate(guided) {

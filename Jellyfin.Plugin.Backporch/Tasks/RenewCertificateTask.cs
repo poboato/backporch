@@ -42,8 +42,21 @@ public class RenewCertificateTask : IScheduledTask
     {
         progress.Report(0);
 
-        var result = await _acmeService.RunAsync(force: false, cancellationToken).ConfigureAwait(false);
-        _logger.LogInformation("Scheduled renewal finished: {Result}", result);
+        var result = await _acmeService
+            .RunAsync(force: false, cancellationToken, unattended: true)
+            .ConfigureAwait(false);
+
+        // A renewal that could not happen is the case worth seeing in the log: the
+        // certificate keeps ageing and the task itself still completes normally.
+        if (result.StartsWith("Failed", StringComparison.Ordinal)
+            || result.StartsWith("Manual DNS", StringComparison.Ordinal))
+        {
+            _logger.LogWarning("Scheduled renewal did not renew the certificate: {Result}", result);
+        }
+        else
+        {
+            _logger.LogInformation("Scheduled renewal finished: {Result}", result);
+        }
 
         progress.Report(100);
     }

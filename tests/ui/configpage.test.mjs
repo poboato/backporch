@@ -48,8 +48,17 @@ const stub = () => {
       if (opts.url.includes('ConfirmDns')) return Promise.resolve(JSON.parse(JSON.stringify(s.status)));
       return Promise.reject(new Error('unknown url ' + opts.url));
     },
-    getPluginConfiguration: () => Promise.resolve(JSON.parse(JSON.stringify(window.__state.config))),
-    updatePluginConfiguration: (id, c) => { window.__saved = c; return Promise.resolve({}); }
+    getPluginConfiguration: () => {
+      window.__state.configFetches = (window.__state.configFetches || 0) + 1;
+      return Promise.resolve(JSON.parse(JSON.stringify(window.__state.config)));
+    },
+    // A real server persists what it is sent, so later reads see it. Keeping that
+    // faithful matters: the page now re-reads configuration before each save.
+    updatePluginConfiguration: (id, c) => {
+      window.__saved = c;
+      window.__state.config = JSON.parse(JSON.stringify(c));
+      return Promise.resolve({});
+    }
   };
   window.Dashboard = {
     showLoadingMsg() {}, hideLoadingMsg() {}, processPluginConfigurationUpdateResult() {}
@@ -162,6 +171,40 @@ assert(await hasClass('#bpStep5', 'bp-active'), 'step 5 active');
 assert((await page.textContent('#bpCertPath')).includes('/data/backporch/certificate.pfx'), 'cert path shown');
 assert((await page.textContent('#bpFinalUrl')).includes('https://jellyfin.example.com'), 'final URL shown');
 assert(!(await page.isVisible('#bpManualRecord')), 'manual card hidden after success');
+
+// After a run finishes, the page must pick the server's writes back up rather than
+// keeping the copy it fetched at load — otherwise the next save reverts them.
+const afterRun = await page.evaluate(() => window.__state.configFetches);
+assert(afterRun > 1, 'config refetched after the run finished');
+
+// Regression: the server owns some of these fields. A later save must not post the
+// stale page-load snapshot back over them (that once re-enabled staging and wiped the
+// ACME account key, which would swap a real certificate for an untrusted one).
+await page.evaluate(() => {
+  window.__state.config = Object.assign({}, window.__state.config, {
+    AccountKeyPem: '-----BEGIN EC PRIVATE KEY-----',
+    UseStaging: false,
+    CertificateExpiryUtc: '2026-12-01T00:00:00Z'
+  });
+});
+await page.evaluate(() => { document.querySelector('details.bp-advanced').open = true; });
+await page.click('#bpSaveAdvanced');
+await page.waitForTimeout(300);
+const savedLater = await page.evaluate(() => window.__saved);
+assert(savedLater.AccountKeyPem === '-----BEGIN EC PRIVATE KEY-----', 'save preserves the server-written account key');
+assert(savedLater.UseStaging === false, 'save does not re-enable staging behind the user');
+assert(savedLater.CertificateExpiryUtc === '2026-12-01T00:00:00Z', 'save preserves the recorded expiry');
+
+// A base URL redirects the proof path away from the CA: warn instead of failing later.
+await page.evaluate(() => {
+  window.__state.check = Object.assign({}, window.__state.check, { BaseUrl: '/jellyfin' });
+});
+await page.selectOption('#bpProvider', 'Http');
+await page.click('#bpRecheck');
+await page.waitForTimeout(400);
+assert(await page.isVisible('#bpBaseUrlWarning'), 'base URL warning shown for HTTP proof');
+const warnText = await page.textContent('#bpBaseUrlWarning');
+assert(warnText.includes('/jellyfin'), 'warning names the configured base URL');
 
 await browser.close();
 if (errors.length) {

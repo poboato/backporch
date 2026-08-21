@@ -130,10 +130,13 @@ public sealed class CloudflareDnsProvider : IDnsProvider
             }
         }
 
+        // An empty result is indistinguishable from "your token cannot list zones", and
+        // the latter is by far the more common cause: a token made from Cloudflare's
+        // "Edit zone DNS" template can write records but not read the zone list.
         throw new InvalidOperationException(
             string.Create(
                 CultureInfo.InvariantCulture,
-                $"No Cloudflare zone found for '{recordName}'. Check that the domain is on this Cloudflare account and the token covers its zone."));
+                $"No Cloudflare zone found for '{recordName}'. Check that the domain is on this Cloudflare account, and that the token has BOTH Zone → Zone → Read and Zone → DNS → Edit permissions — a token with only DNS edit rights cannot find the zone."));
     }
 
     /// <summary>

@@ -18,9 +18,13 @@ mkdir -p "$STAGE"
 
 "$DOTNET" publish Jellyfin.Plugin.Backporch/Jellyfin.Plugin.Backporch.csproj -c Release -o "$OUT/publish"
 
+# Certes depends on Newtonsoft.Json, so it ships too. Jellyfin happens to carry its
+# own copy today, but relying on that would make the plugin break on any server
+# release that drops or downgrades it.
 cp "$OUT/publish/Jellyfin.Plugin.Backporch.dll" \
    "$OUT/publish/Certes.dll" \
    "$OUT/publish/BouncyCastle.Crypto.dll" \
+   "$OUT/publish/Newtonsoft.Json.dll" \
    "$STAGE/"
 
 (cd "$STAGE" && zip -q "../${NAME}_${VERSION}.zip" ./*)

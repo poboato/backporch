@@ -1,9 +1,12 @@
 using System.Net.Mime;
 using System.Net.Sockets;
+using System.Text.Json;
 using Jellyfin.Plugin.Backporch.Acme;
 using Jellyfin.Plugin.Backporch.Configuration;
 using Jellyfin.Plugin.Backporch.Dns;
 using MediaBrowser.Common.Api;
+using MediaBrowser.Common.Configuration;
+using MediaBrowser.Common.Net;
 using MediaBrowser.Controller;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -24,6 +27,7 @@ public class BackporchController : ControllerBase
     private readonly IssuanceState _state;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IServerApplicationHost _appHost;
+    private readonly IConfigurationManager _configurationManager;
     private readonly ILogger<BackporchController> _logger;
 
     /// <summary>
@@ -33,18 +37,21 @@ public class BackporchController : ControllerBase
     /// <param name="state">Shared issuance progress state.</param>
     /// <param name="httpClientFactory">Factory for the preflight check's HTTP calls.</param>
     /// <param name="appHost">The server host, for its listening ports.</param>
+    /// <param name="configurationManager">Server configuration, for the network base URL.</param>
     /// <param name="logger">Logger.</param>
     public BackporchController(
         AcmeService acmeService,
         IssuanceState state,
         IHttpClientFactory httpClientFactory,
         IServerApplicationHost appHost,
+        IConfigurationManager configurationManager,
         ILogger<BackporchController> logger)
     {
         _acmeService = acmeService;
         _state = state;
         _httpClientFactory = httpClientFactory;
         _appHost = appHost;
+        _configurationManager = configurationManager;
         _logger = logger;
     }
 
@@ -118,7 +125,16 @@ public class BackporchController : ControllerBase
     public async Task<ActionResult<BackporchCheckDto>> Check(CancellationToken cancellationToken)
     {
         var config = Plugin.Instance!.Configuration;
-        var dto = new BackporchCheckDto { Domain = config.Domain, HttpPort = _appHost.HttpPort };
+        var dto = new BackporchCheckDto
+        {
+            Domain = config.Domain,
+            HttpPort = _appHost.HttpPort,
+
+            // A base URL makes Jellyfin redirect every unprefixed request to the web
+            // client — including the well-known path the CA must fetch, which it is
+            // required to request unprefixed. HTTP proof cannot work while one is set.
+            BaseUrl = _configurationManager.GetNetworkConfiguration().BaseUrl ?? string.Empty
+        };
 
         try
         {
@@ -163,9 +179,15 @@ public class BackporchController : ControllerBase
                 dto.ZoneName = await provider.VerifyAccessAsync(config.Domain, cancellationToken).ConfigureAwait(false);
                 dto.ZoneOk = true;
             }
-            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or TaskCanceledException)
+            catch (Exception ex) when (ex is InvalidOperationException
+                or HttpRequestException
+                or TaskCanceledException
+                or JsonException)
             {
                 // Provider errors carry Cloudflare's own message, never the token.
+                // JsonException included: an outage or intercepting proxy answers with an
+                // HTML error page, and letting that escape would fail the whole preflight
+                // — losing the public IP and A-record card over an unrelated hiccup.
                 dto.ZoneOk = false;
                 dto.ZoneError = ex.Message;
             }
@@ -267,6 +289,12 @@ public class BackporchCheckDto
 
     /// <summary>Gets or sets the port Jellyfin serves plain HTTP on (port-80 forward target).</summary>
     public int HttpPort { get; set; }
+
+    /// <summary>
+    /// Gets or sets Jellyfin's configured base URL. Non-empty means HTTP proof cannot
+    /// work: the server redirects the unprefixed challenge path to the web client.
+    /// </summary>
+    public string BaseUrl { get; set; } = string.Empty;
 
     /// <summary>Gets or sets the addresses the domain currently resolves to.</summary>
     public IReadOnlyList<string>? ResolvedAddresses { get; set; }

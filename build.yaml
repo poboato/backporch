@@ -10,13 +10,16 @@ owner: "poboato"
 overview: "Automatic trusted TLS certificates for a self-hosted server."
 description: >
   Automatically obtains and renews a Let's Encrypt certificate for your own
-  domain via the DNS-01 challenge, so remote access is encrypted with a
-  certificate every device already trusts. No inbound port is needed to issue.
+  domain, so remote access is encrypted with a certificate every device already
+  trusts. By default the server answers the ownership challenge itself, with no
+  DNS credentials to create; a DNS-01 route is available when port 80 is closed.
 category: "General"
 artifacts:
   - "Jellyfin.Plugin.Backporch.dll"
   - "Certes.dll"
   - "BouncyCastle.Crypto.dll"
+  - "Newtonsoft.Json.dll"
 changelog: |
-  Initial release: DNS-01 issuance via Cloudflare, staging-first defaults,
-  daily renewal task, admin-only API and configuration page.
+  Initial release: guided setup page, tokenless HTTP-01 issuance by default with
+  DNS-01 (Cloudflare or manual) as a fallback, staging-first defaults, daily
+  renewal task, admin-only API and configuration page.

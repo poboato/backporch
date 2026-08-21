@@ -138,6 +138,40 @@ on a .NET 10 SDK need `DOTNET_ROLL_FORWARD=Major`.
 Never change it — Jellyfin identifies the plugin (and its stored config) by
 GUID; changing it orphans every existing install.
 
+### Configuration is snapshotted, and merged at exactly one point
+Issuance runs for minutes; Jellyfin's `UpdateConfiguration` **replaces** the
+configuration object rather than mutating it. A run that holds the object it
+started with therefore writes its results into a detached instance the moment
+anyone saves the page — the expiry silently never persists, which makes the
+renewal task re-issue every night until Let's Encrypt's duplicate-certificate
+limit locks the domain out for a week. So: the pipeline works on
+`Configuration.Clone()`, and `Persist()` re-reads the live object and copies
+across only the fields a run owns (account key, expiry, outcome, the proven
+flag). The same rule applies in the browser — the page re-reads configuration
+before every save, and a control the server also writes (the staging checkbox)
+is only posted back once the user actually moves it.
+**Cost of change:** losing either half reintroduces silent state loss that no
+unit test catches, because it needs a save to race a long run.
+
+### An authorization the CA already accepted is skipped, not answered
+Let's Encrypt reuses a successful domain validation for about 30 days. Posting
+a challenge validation to such an authorization is an error
+(`authorization must be pending`), so every re-issuance inside that window
+failed — and on the manual path the user was first sent to publish a TXT
+record that nothing would ever read. The pipeline now checks authorization
+status before touching a provider, and guards `Dns()` for null the same way
+the HTTP path always did (a reused HTTP authorization carries no DNS
+challenge). CI forces this state with `PEBBLE_AUTHZREUSE=100`.
+
+### Requests retry on a rejected nonce
+RFC 8555 requires a client whose request is refused for a stale anti-replay
+nonce to retry with a fresh one; Certes supports it but defaults to a single
+retry, which the plugin never raised. Pebble rejects a share of nonces
+deliberately to catch exactly this, and it did — intermittently, which is why
+several earlier green CI runs proved nothing. Both `AcmeContext`s now allow
+five retries. Retrying is safe: a rejected request was never processed, so it
+cannot double-issue.
+
 ## Testing strategy, and what it taught
 
 Three CI jobs, all required: unit tests + package, browser UI test, and

@@ -116,6 +116,11 @@ And against Let's Encrypt's **Pebble** test CA (real ACME, no real DNS):
   owner-only permissions that matches the hostname. This runs in CI on every
   push.
 
+- Re-issuing immediately for the same domain against a CA that reuses
+  authorizations (`PEBBLE_AUTHZREUSE=100`), which is what Let's Encrypt does
+  for about 30 days — the case that must skip challenge validation rather than
+  post to an authorization the CA already accepted.
+
 And the guided setup page itself, in headless Chromium
 (`tests/ui/configpage.test.mjs`, also in CI): step locking and unlocking, the
 A-record display with the detected public IP, the live DNS check, both DNS
@@ -132,8 +137,14 @@ API against a live zone.
 - HTTP-01 needs port 80 reachable from the internet at issuance and renewal
   time, and assumes Jellyfin is served at the domain's root (no reverse-proxy
   path prefix in front of the well-known route).
-- Cloudflare is the only *automatic* DNS provider so far; manual DNS mode
-  works anywhere but asks for a fresh copy-paste at every renewal.
+- HTTP-01 also requires Jellyfin's **Base URL** setting to be empty: with one
+  set, the server redirects the challenge path away from the plugin. The setup
+  page detects this and says so.
+- Cloudflare is the only *automatic* DNS provider so far, and its token needs
+  both **Zone → Read** and **DNS → Edit** (Cloudflare's "Edit zone DNS"
+  template alone is not enough — it cannot look up the zone). Manual DNS mode
+  works anywhere but **cannot renew unattended**: the scheduled task skips it
+  and says so rather than hanging, so you must renew from the page by hand.
 - Jellyfin loads the certificate at startup, so a renewed certificate is
   picked up at the next restart. (A future core contribution could hot-reload
   via Kestrel's certificate selector.)

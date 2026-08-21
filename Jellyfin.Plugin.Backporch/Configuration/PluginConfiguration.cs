@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.Backporch.Configuration;
@@ -140,4 +141,24 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the expiry of the certificate currently on disk.
     /// </summary>
     public DateTime? CertificateExpiryUtc { get; set; }
+
+    /// <summary>
+    /// Returns an independent copy of this configuration.
+    /// </summary>
+    /// <remarks>
+    /// Issuance runs for minutes, and Jellyfin's <c>UpdateConfiguration</c> replaces the
+    /// whole configuration object — so a save from the setup page mid-run would otherwise
+    /// leave the pipeline holding a detached instance whose writes go nowhere. The
+    /// pipeline therefore works from a copy and merges its results into the live object
+    /// at the end. Copying by serializer round-trip rather than by hand means a property
+    /// added later cannot be silently left behind (which would also make the staging dry
+    /// run prove a different configuration than the production run uses).
+    /// </remarks>
+    /// <returns>A deep copy carrying every serializable property.</returns>
+    public PluginConfiguration Clone()
+    {
+        var json = JsonSerializer.Serialize(this);
+        return JsonSerializer.Deserialize<PluginConfiguration>(json)
+            ?? throw new InvalidOperationException("Could not copy the plugin configuration.");
+    }
 }

@@ -18,6 +18,15 @@ namespace Jellyfin.Plugin.Backporch.Acme;
 /// </remarks>
 public sealed class AcmeService
 {
+    /// <summary>
+    /// How many times to retry a request the CA rejects for a stale anti-replay nonce.
+    /// RFC 8555 requires clients to retry with a fresh one; Certes defaults to a single
+    /// retry, which is thin when nonces expire mid-run (Let's Encrypt) or are rejected
+    /// deliberately to test clients (Pebble rejects a percentage on purpose). Retries are
+    /// cheap and never re-issue anything — a rejected request was never processed.
+    /// </summary>
+    private const int BadNonceRetries = 5;
+
     private static readonly TimeSpan _validationTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan _manualDnsTimeout = TimeSpan.FromMinutes(15);
@@ -52,8 +61,15 @@ public sealed class AcmeService
     /// </summary>
     /// <param name="force">Issue even when the current certificate is still healthy.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="unattended">
+    /// Set for the scheduled task, where no one is at the configuration page: modes that
+    /// need a human (manual DNS) fail immediately rather than waiting out their timeout.
+    /// </param>
     /// <returns>A human-readable description of what happened.</returns>
-    public async Task<string> RunAsync(bool force, CancellationToken cancellationToken)
+    public async Task<string> RunAsync(
+        bool force,
+        CancellationToken cancellationToken,
+        bool unattended = false)
     {
         if (!_state.TryBegin())
         {
@@ -66,15 +82,18 @@ public sealed class AcmeService
         {
             plugin = Plugin.Instance
                 ?? throw new InvalidOperationException("Plugin instance is not available.");
-            var config = plugin.Configuration;
+
+            // Work from a copy: a save from the setup page would swap the live object out
+            // from under a run that lasts minutes. Results merge back in Persist().
+            var config = plugin.Configuration.Clone();
 
             ApplyDefaultCertificatePath(plugin, config);
 
-            var problem = Validate(config);
+            var problem = Validate(config) ?? (unattended ? UnattendedProblem(config) : null);
             if (problem is not null)
             {
                 _state.Finish(false, problem);
-                return Record(plugin, problem);
+                return Persist(plugin, config, problem, expiry: null);
             }
 
             if (!force && !NeedsRenewal(config))
@@ -88,7 +107,6 @@ public sealed class AcmeService
             }
 
             var expiry = await IssueAsync(config, cancellationToken).ConfigureAwait(false);
-            config.CertificateExpiryUtc = expiry;
 
             var message = string.Format(
                 CultureInfo.InvariantCulture,
@@ -102,7 +120,7 @@ public sealed class AcmeService
             }
 
             _state.Finish(true, message);
-            return Record(plugin, message);
+            return Persist(plugin, config, message, expiry);
         }
         catch (OperationCanceledException)
         {
@@ -114,7 +132,7 @@ public sealed class AcmeService
             _logger.LogError(ex, "Certificate issuance failed");
             var failure = "Failed — " + ex.Message;
             _state.Finish(false, failure);
-            return plugin is null ? failure : Record(plugin, failure);
+            return plugin is null ? failure : Persist(plugin, null, failure, expiry: null);
         }
     }
 
@@ -138,7 +156,9 @@ public sealed class AcmeService
         {
             plugin = Plugin.Instance
                 ?? throw new InvalidOperationException("Plugin instance is not available.");
-            var config = plugin.Configuration;
+
+            // As in RunAsync: issue against a copy, merge at the end.
+            var config = plugin.Configuration.Clone();
 
             ApplyDefaultCertificatePath(plugin, config);
 
@@ -146,7 +166,7 @@ public sealed class AcmeService
             if (problem is not null)
             {
                 _state.Finish(false, problem);
-                return Record(plugin, problem);
+                return Persist(plugin, config, problem, expiry: null);
             }
 
             if (config.UseStaging && string.IsNullOrWhiteSpace(config.DirectoryUrl))
@@ -176,25 +196,28 @@ public sealed class AcmeService
                 }
 
                 // Keep the account the dry run registered, and mark the setup proven.
+                // Persist through the merge so a save made during the dry run survives.
                 config.AccountKeyPem = testConfig.AccountKeyPem;
                 config.UseStaging = false;
-                plugin.UpdateConfiguration(config);
+                Persist(plugin, config, message: null, expiry: null);
 
                 _state.SetTestRun(false);
                 _logger.LogInformation("Staging dry run succeeded; issuing the real certificate");
             }
 
             var expiry = await IssueAsync(config, cancellationToken).ConfigureAwait(false);
-            config.CertificateExpiryUtc = expiry;
 
             var message = string.Format(
                 CultureInfo.InvariantCulture,
-                "Issued a certificate for {0}, valid until {1:yyyy-MM-dd}. Renewal is automatic.",
+                "Issued a certificate for {0}, valid until {1:yyyy-MM-dd}.{2}",
                 config.Domain,
-                expiry);
+                expiry,
+                config.Challenge == ChallengeKind.Dns && config.DnsProvider == DnsProviderKind.Manual
+                    ? " Renewal will ask you for a new TXT record — see the page before it expires."
+                    : " Renewal is automatic.");
 
             _state.Finish(true, message);
-            return Record(plugin, message);
+            return Persist(plugin, config, message, expiry);
         }
         catch (OperationCanceledException)
         {
@@ -206,7 +229,7 @@ public sealed class AcmeService
             _logger.LogError(ex, "Guided issuance failed");
             var failure = "Failed — " + ex.Message;
             _state.Finish(false, failure);
-            return plugin is null ? failure : Record(plugin, failure);
+            return plugin is null ? failure : Persist(plugin, null, failure, expiry: null);
         }
     }
 
@@ -271,38 +294,89 @@ public sealed class AcmeService
         return null;
     }
 
+    /// <summary>
+    /// Manual DNS needs someone at the configuration page to publish the TXT record. On
+    /// the nightly task there is no one, so say so at once instead of blocking for the
+    /// full manual-DNS timeout and failing anyway.
+    /// </summary>
+    private static string? UnattendedProblem(PluginConfiguration config) =>
+        config.Challenge == ChallengeKind.Dns && config.DnsProvider == DnsProviderKind.Manual
+            ? "Manual DNS mode needs someone to publish the challenge record, so it cannot "
+              + "renew on a schedule. Open the Backporch page to renew by hand, or switch to "
+              + "the automatic proof (or Cloudflare) to make renewals hands-off."
+            : null;
+
+    private static PluginConfiguration CloneForTestRun(PluginConfiguration config)
+    {
+        var test = config.Clone();
+        test.UseStaging = true;
+        test.CertificatePath = config.CertificatePath + ".test";
+        return test;
+    }
+
     private static void ApplyDefaultCertificatePath(Plugin plugin, PluginConfiguration config)
     {
         if (string.IsNullOrWhiteSpace(config.CertificatePath))
         {
             config.CertificatePath = plugin.DefaultCertificatePath;
-            plugin.UpdateConfiguration(config);
         }
     }
 
-    private static PluginConfiguration CloneForTestRun(PluginConfiguration config) => new()
+    /// <summary>
+    /// The single point where a run's results reach persisted configuration. Re-reads the
+    /// live object first, because the one the run started from may have been replaced by a
+    /// save from the setup page while issuance was in flight; only the fields the run owns
+    /// are copied across, so the user's edits survive and the run's results are not lost.
+    /// </summary>
+    /// <param name="plugin">The plugin whose configuration is being updated.</param>
+    /// <param name="source">The run's working copy, or <c>null</c> when a run failed before producing one.</param>
+    /// <param name="message">Outcome to record, or <c>null</c> to leave the last outcome alone.</param>
+    /// <param name="expiry">Expiry of a freshly issued certificate, when there is one.</param>
+    /// <returns>The message, for the caller to return onward.</returns>
+    private string Persist(Plugin plugin, PluginConfiguration? source, string? message, DateTime? expiry)
     {
-        Enabled = config.Enabled,
-        Challenge = config.Challenge,
-        Domain = config.Domain,
-        AccountEmail = config.AccountEmail,
-        DnsProvider = config.DnsProvider,
-        DnsApiToken = config.DnsApiToken,
-        UseStaging = true,
-        DnsPropagationSeconds = config.DnsPropagationSeconds,
-        RenewDaysBeforeExpiry = config.RenewDaysBeforeExpiry,
-        CertificatePath = config.CertificatePath + ".test",
-        CertificatePassword = config.CertificatePassword,
-        AccountKeyPem = config.AccountKeyPem
-    };
+        var live = plugin.Configuration;
 
-    private string Record(Plugin plugin, string message)
-    {
-        plugin.Configuration.LastAttemptUtc = DateTime.UtcNow;
-        plugin.Configuration.LastResult = message;
-        plugin.UpdateConfiguration(plugin.Configuration);
-        _logger.LogInformation("ACME: {Result}", message);
-        return message;
+        if (message is not null)
+        {
+            live.LastAttemptUtc = DateTime.UtcNow;
+            live.LastResult = message;
+        }
+
+        if (expiry is not null)
+        {
+            live.CertificateExpiryUtc = expiry;
+        }
+
+        if (source is not null)
+        {
+            // Server-owned fields the run may have established.
+            if (!string.IsNullOrWhiteSpace(source.AccountKeyPem))
+            {
+                live.AccountKeyPem = source.AccountKeyPem;
+            }
+
+            if (string.IsNullOrWhiteSpace(live.CertificatePath)
+                && !string.IsNullOrWhiteSpace(source.CertificatePath))
+            {
+                live.CertificatePath = source.CertificatePath;
+            }
+
+            // The dry run proves production is safe; never flip staging back on here.
+            if (!source.UseStaging)
+            {
+                live.UseStaging = false;
+            }
+        }
+
+        plugin.UpdateConfiguration(live);
+
+        if (message is not null)
+        {
+            _logger.LogInformation("ACME: {Result}", message);
+        }
+
+        return message ?? string.Empty;
     }
 
     private Task<DateTime> IssueAsync(PluginConfiguration config, CancellationToken cancellationToken)
@@ -353,6 +427,18 @@ public sealed class AcmeService
         {
             foreach (var authorization in authorizations)
             {
+                // A certificate authority may hand back an authorization it already
+                // considers valid (Let's Encrypt reuses them for about 30 days). Posting a
+                // validation to one is an error — "authorization must be pending" — so
+                // there is nothing to answer, and on the manual path it would otherwise
+                // send the user off to publish a TXT record nothing will ever read.
+                if (await IsAlreadyValidAsync(authorization).ConfigureAwait(false))
+                {
+                    _logger.LogInformation(
+                        "Reusing an authorization the certificate authority already accepted");
+                    continue;
+                }
+
                 if (config.Challenge == ChallengeKind.Http)
                 {
                     await AnswerHttpChallengeAsync(acme, authorization, placedTokens, cancellationToken)
@@ -441,7 +527,12 @@ public sealed class AcmeService
         List<string> placedRecords,
         CancellationToken cancellationToken)
     {
-        var challenge = await authorization.Dns().ConfigureAwait(false);
+        var challenge = await authorization.Dns().ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                "The certificate authority offered no DNS challenge for this order. This "
+                + "happens when it reuses an authorization from an earlier run that was "
+                + "proven a different way; try again in a few minutes.");
+
         var digest = acme.AccountKey.DnsTxt(challenge.Token);
 
         var resource = await authorization.Resource().ConfigureAwait(false);
@@ -477,6 +568,16 @@ public sealed class AcmeService
         await WaitForValidationAsync(authorization, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Whether the certificate authority already treats this authorization as proven, in
+    /// which case no challenge should be answered or posted for it.
+    /// </summary>
+    private static async Task<bool> IsAlreadyValidAsync(IAuthorizationContext authorization)
+    {
+        var resource = await authorization.Resource().ConfigureAwait(false);
+        return resource.Status == AuthorizationStatus.Valid;
+    }
+
     private async Task<IAcmeContext> GetOrCreateAccountAsync(
         PluginConfiguration config,
         Uri directory,
@@ -487,7 +588,8 @@ public sealed class AcmeService
 
         if (!string.IsNullOrWhiteSpace(config.AccountKeyPem))
         {
-            var existing = new AcmeContext(directory, KeyFactory.FromPem(config.AccountKeyPem), http);
+            var existing = new AcmeContext(
+                directory, KeyFactory.FromPem(config.AccountKeyPem), http, BadNonceRetries);
 
             try
             {
@@ -508,17 +610,12 @@ public sealed class AcmeService
 
         _logger.LogInformation("Registering a new ACME account against {Directory}", directory);
 
-        var acme = new AcmeContext(directory, null, http);
+        var acme = new AcmeContext(directory, null, http, BadNonceRetries);
         await acme.NewAccount(config.AccountEmail, termsOfServiceAgreed: true).ConfigureAwait(false);
 
+        // Recorded on the run's working copy; Persist() carries it into the live
+        // configuration once, at the end of the run.
         config.AccountKeyPem = acme.AccountKey.ToPem();
-
-        // Persist only when we hold the live configuration — a dry-run clone must never
-        // replace the real one (UpdateConfiguration swaps the whole object in).
-        if (Plugin.Instance is { } plugin && ReferenceEquals(plugin.Configuration, config))
-        {
-            plugin.UpdateConfiguration(config);
-        }
 
         cancellationToken.ThrowIfCancellationRequested();
         return acme;

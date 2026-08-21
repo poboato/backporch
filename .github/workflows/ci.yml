@@ -62,7 +62,11 @@ jobs:
         run: |
           docker run -d --name challtestsrv --network host \
             ghcr.io/letsencrypt/pebble-challtestsrv:latest -defaultIPv4 "" -defaultIPv6 "" -http01 ""
-          docker run -d --name pebble --network host \
+          # PEBBLE_AUTHZREUSE=100 makes every order reuse a previously validated
+          # authorization — what Let's Encrypt does for ~30 days, and the state that
+          # used to break re-issuance. Pebble also rejects a share of nonces on
+          # purpose, which is how the missing badNonce retry surfaced.
+          docker run -d --name pebble --network host -e PEBBLE_AUTHZREUSE=100 \
             ghcr.io/letsencrypt/pebble:latest -dnsserver 127.0.0.1:8053
           for i in $(seq 1 30); do
             curl -sk https://localhost:14000/dir >/dev/null && break
