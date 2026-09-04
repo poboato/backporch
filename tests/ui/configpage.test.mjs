@@ -36,6 +36,20 @@ const stub = () => {
       Domain: '', PublicIp: '108.194.46.197', HttpPort: 8096, ResolvedAddresses: ['1.2.3.4'],
       DomainMatchesPublicIp: false, ZoneOk: null, ZoneName: null, ZoneError: null,
       ChallengeListenerExpectedPort: 80, ChallengeListenerPort: 80, ChallengeListenerError: null
+    },
+    discovery: {
+      Domain: '', Endpoint: '/var/run/docker.sock', Problem: null,
+      Apps: [
+        { Container: 'sonarr', Image: 'linuxserver/sonarr', Port: 8989, AlternatePorts: [],
+          Label: 'sonarr', Hostname: '', Risk: 'Ordinary', RiskReason: '' },
+        { Container: 'homepage', Image: 'gethomepage/homepage', Port: 80, AlternatePorts: [3000],
+          Label: 'homepage', Hostname: '', Risk: 'Ordinary', RiskReason: '' },
+        { Container: 'portainer', Image: 'portainer/portainer-ce', Port: 9000, AlternatePorts: [],
+          Label: 'portainer', Hostname: '', Risk: 'Sensitive',
+          RiskReason: 'it can start, stop and reconfigure every container' },
+        { Container: 'jellyfin', Image: 'jellyfin/jellyfin', Port: 8096, AlternatePorts: [],
+          Label: 'jellyfin', Hostname: '', Risk: 'Ordinary', RiskReason: '', IsThisServer: true }
+      ]
     }
   };
   window.ApiClient = {
@@ -45,6 +59,7 @@ const stub = () => {
       const s = window.__state;
       if (opts.url.includes('Status')) return Promise.resolve(JSON.parse(JSON.stringify(s.status)));
       if (opts.url.includes('Check')) return Promise.resolve(JSON.parse(JSON.stringify(s.check)));
+      if (opts.url.includes('Discover')) return Promise.resolve(JSON.parse(JSON.stringify(s.discovery)));
       if (opts.url.includes('Request')) { return Promise.resolve(JSON.parse(JSON.stringify(s.status))); }
       if (opts.url.includes('ConfirmDns')) return Promise.resolve(JSON.parse(JSON.stringify(s.status)));
       return Promise.reject(new Error('unknown url ' + opts.url));
@@ -258,6 +273,57 @@ assert(Array.isArray(names.ExtraDomains), 'extra names saved as a list');
 assert(names.ExtraDomains.length === 2, 'blank lines are dropped, got ' + JSON.stringify(names.ExtraDomains));
 assert(names.ExtraDomains[1] === 'sonarr.example.com', 'names are trimmed');
 assert(names.Domain === 'jellyfin.example.com', 'the primary name is unchanged');
+
+// Discovery: the machine's own applications, offered by name.
+await page.click('#bpDiscover');
+await page.waitForTimeout(300);
+const discoveryText = await page.textContent('#bpDiscoverResult');
+assert(discoveryText.includes('sonarr.jellyfin.example.com'),
+  'a discovered app is offered as a name under the domain');
+assert(discoveryText.includes('portainer.jellyfin.example.com'),
+  'a sensitive app is still listed');
+assert(discoveryText.includes('think twice'),
+  'a sensitive app is flagged');
+assert(discoveryText.includes('reconfigure every container'),
+  'the flag explains itself');
+assert(discoveryText.includes('also 3000'),
+  'an alternate port is shown rather than silently chosen');
+assert(!discoveryText.includes('jellyfin.jellyfin.example.com'),
+  'this server is not offered a name under itself');
+assert(discoveryText.includes('already covered by your address'),
+  'this server is shown as already covered');
+
+// Ticking one adds exactly that name; the ones typed by hand survive.
+await page.evaluate(() => {
+  document.querySelector('#bpExtraDomains').value = 'typed-by-hand.example.com';
+});
+const ticks = await page.$$('#bpDiscoverResult .bp-app-tick');
+await ticks[0].check();
+await page.waitForTimeout(100);
+let namesBox = await page.inputValue('#bpExtraDomains');
+assert(namesBox.includes('typed-by-hand.example.com'), 'a hand-typed name is not disturbed');
+assert(namesBox.includes('sonarr.jellyfin.example.com'), 'ticking adds the name');
+
+// Unticking removes only that one.
+await ticks[0].uncheck();
+await page.waitForTimeout(100);
+namesBox = await page.inputValue('#bpExtraDomains');
+assert(!namesBox.includes('sonarr.jellyfin.example.com'), 'unticking removes the name');
+assert(namesBox.includes('typed-by-hand.example.com'), 'unticking leaves the rest alone');
+
+// Ticking twice must not add the name twice - a repeated identifier fails the order.
+await ticks[0].check();
+await page.waitForTimeout(100);
+await page.evaluate(() => {
+  const box = document.querySelector('#bpExtraDomains');
+  box.value = box.value + '\nsonarr.jellyfin.example.com';
+});
+await ticks[0].uncheck();
+await ticks[0].check();
+await page.waitForTimeout(100);
+namesBox = await page.inputValue('#bpExtraDomains');
+const occurrences = namesBox.split('\n').filter(n => n.trim() === 'sonarr.jellyfin.example.com').length;
+assert(occurrences === 1, 'a name is never listed twice, got ' + occurrences);
 
 await browser.close();
 if (errors.length) {

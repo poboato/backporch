@@ -105,6 +105,42 @@ form should be able to run a command as the account hosting the media server —
 a systemd path unit watching the PEM file, or a timer, is both simpler and a far
 smaller thing to get wrong.
 
+## It finds the applications for you
+
+Typing a name for every application on a machine means remembering what is running
+and which port each one answers on. Backporch reads the container list instead and
+offers each one a name under your domain, ready to tick.
+
+Nothing is published by ticking a box. It only adds the name to the certificate;
+what serves that name is still whatever proxy you point at it.
+
+The list is not a straight dump of what is running, because "running" and "safe to
+put on the internet" are different questions:
+
+- **The Docker API itself is never offered.** A socket proxy reachable from the
+  internet is the whole machine, so it is filtered out before anything is shown.
+- **Things that hand over more than their own data are flagged**, with the reason
+  in plain words — a container manager that can reconfigure everything, a download
+  client's web interface, a host metrics page — and they sort to the bottom, so a
+  quick skim down the list does not run into them first.
+- **Known non-HTTP ports are never chosen.** A BitTorrent port behind a web proxy
+  connects happily and then makes no sense, which is a miserable thing to diagnose.
+- **A container publishing several web ports keeps the others as alternatives**
+  rather than having one picked silently.
+- **The server running this plugin is not offered a name under itself** — it is
+  already the primary name, and the suggestion would read
+  `jellyfin.jellyfin.example.com`.
+- **Names are made unique.** `-ui` and `-app` suffixes are dropped, because
+  `fogline.example.com` reads better than `fogline-ui.example.com`; where that
+  makes two applications collide, the full container name breaks the tie. Two
+  identical names on one certificate would be de-duplicated into a front door where
+  one of them is quietly unreachable.
+
+Discovery only ever reads, and it makes exactly one call: a container listing. The
+recommended arrangement is a **read-only socket proxy** limited to that one thing,
+rather than the raw Docker socket — set its address under Advanced. Where Docker
+cannot be reached at all, the page says so and the names can be typed by hand.
+
 ## Security posture
 
 ### Nothing of Jellyfin is served over plain HTTP
@@ -267,6 +303,15 @@ And against Let's Encrypt's **Pebble** test CA (real ACME, no real DNS):
   proxy at start and rejected by clients afterwards), the key file is `0600`,
   and the chain file is readable by the proxy's account.
 
+- **Discovery, against this machine's own containers**, from inside a Jellyfin
+  container reaching a read-only socket proxy: 20 applications found and offered
+  names, the socket proxy itself absent from the list, the container manager and
+  the VPN gateway both flagged with reasons and sorted last, the gateway's
+  BitTorrent port not chosen, the dashboard's second web port kept as an
+  alternative, `-ui` suffixes dropped, and Jellyfin itself recognised as the
+  server asking rather than offered `jellyfin.jellyfin.example.com`. The unit
+  tests run the same judgements against a captured listing of those containers.
+
 - Re-issuing immediately for the same domain against a CA that reuses
   authorizations (`PEBBLE_AUTHZREUSE=100`), which is what Let's Encrypt does
   for about 30 days — the case that must skip challenge validation rather than
@@ -297,6 +342,8 @@ API against a live zone.
 - HTTP-01 also requires Jellyfin's **Base URL** setting to be empty: with one
   set, the server redirects the challenge path away from the plugin. The setup
   page detects this and says so.
+- Discovery reads Docker only. Applications that are not containers, or that run
+  on another machine, have to be named by hand.
 - Cloudflare is the only *automatic* DNS provider so far, and its token needs
   both **Zone → Read** and **DNS → Edit** (Cloudflare's "Edit zone DNS"
   template alone is not enough — it cannot look up the zone). Manual DNS mode

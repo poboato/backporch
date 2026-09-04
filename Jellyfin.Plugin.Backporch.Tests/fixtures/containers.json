@@ -1,0 +1,424 @@
+[
+  {
+    "Names": [
+      "/bazarr"
+    ],
+    "Image": "lscr.io/linuxserver/bazarr:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 6767,
+        "Type": "tcp",
+        "PublicPort": 6767
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/byparr"
+    ],
+    "Image": "ghcr.io/thephaseless/byparr:latest",
+    "State": "running",
+    "Ports": [],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/claude-resume-ui"
+    ],
+    "Image": "claude-resume-ui:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8788,
+        "Type": "tcp",
+        "PublicPort": 8788
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/dockerproxy"
+    ],
+    "Image": "ghcr.io/tecnativa/docker-socket-proxy:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 2375,
+        "Type": "tcp"
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/emios"
+    ],
+    "Image": "emios-beta-emios",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8000,
+        "Type": "tcp",
+        "PublicPort": 9300
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/fogline-ui"
+    ],
+    "Image": "fogline:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8793,
+        "Type": "tcp",
+        "PublicPort": 8793
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/glances"
+    ],
+    "Image": "nicolargo/glances:latest-full",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 61208,
+        "Type": "tcp"
+      },
+      {
+        "PrivatePort": 61209,
+        "Type": "tcp"
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/gluetun"
+    ],
+    "Image": "qmcgaw/gluetun:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 6881,
+        "Type": "tcp",
+        "PublicPort": 6881
+      },
+      {
+        "PrivatePort": 6881,
+        "Type": "udp",
+        "PublicPort": 6881
+      },
+      {
+        "PrivatePort": 8080,
+        "Type": "tcp",
+        "PublicPort": 8080
+      },
+      {
+        "PrivatePort": 8191,
+        "Type": "tcp",
+        "PublicPort": 8191
+      },
+      {
+        "PrivatePort": 1080,
+        "Type": "tcp"
+      },
+      {
+        "PrivatePort": 1080,
+        "Type": "udp"
+      },
+      {
+        "PrivatePort": 8000,
+        "Type": "tcp"
+      },
+      {
+        "PrivatePort": 8388,
+        "Type": "tcp"
+      },
+      {
+        "PrivatePort": 8388,
+        "Type": "udp"
+      },
+      {
+        "PrivatePort": 8888,
+        "Type": "tcp"
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/heimdall"
+    ],
+    "Image": "lscr.io/linuxserver/heimdall:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 443,
+        "Type": "tcp"
+      },
+      {
+        "PrivatePort": 80,
+        "Type": "tcp",
+        "PublicPort": 8090
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/homepage"
+    ],
+    "Image": "ghcr.io/gethomepage/homepage:v1.13.2",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 3000,
+        "Type": "tcp",
+        "PublicPort": 80
+      },
+      {
+        "PrivatePort": 3000,
+        "Type": "tcp",
+        "PublicPort": 3000
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/intermission-ui"
+    ],
+    "Image": "intermission-ui:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8789,
+        "Type": "tcp",
+        "PublicPort": 8789
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/jellyfin"
+    ],
+    "Image": "jellyfin/jellyfin:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8096,
+        "Type": "tcp",
+        "PublicPort": 8096
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/plex"
+    ],
+    "Image": "lscr.io/linuxserver/plex:latest",
+    "State": "running",
+    "Ports": [],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/portainer"
+    ],
+    "Image": "portainer/portainer-ce:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 9443,
+        "Type": "tcp"
+      },
+      {
+        "PrivatePort": 8000,
+        "Type": "tcp"
+      },
+      {
+        "PrivatePort": 9000,
+        "Type": "tcp",
+        "PublicPort": 9000
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/prowlarr"
+    ],
+    "Image": "lscr.io/linuxserver/prowlarr:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 9696,
+        "Type": "tcp",
+        "PublicPort": 9696
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/qbittorrent"
+    ],
+    "Image": "lscr.io/linuxserver/qbittorrent:latest",
+    "State": "running",
+    "Ports": [],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/radarr"
+    ],
+    "Image": "lscr.io/linuxserver/radarr:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 7878,
+        "Type": "tcp",
+        "PublicPort": 7878
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/rustdesk-hbbr"
+    ],
+    "Image": "rustdesk/rustdesk-server:latest",
+    "State": "running",
+    "Ports": [],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/rustdesk-hbbs"
+    ],
+    "Image": "rustdesk/rustdesk-server:latest",
+    "State": "running",
+    "Ports": [],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/sdr-history"
+    ],
+    "Image": "sdr-history:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8792,
+        "Type": "tcp",
+        "PublicPort": 8792
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/sdr-hub"
+    ],
+    "Image": "sdr-hub:t572d",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8000,
+        "Type": "tcp"
+      },
+      {
+        "PrivatePort": 80,
+        "Type": "tcp",
+        "PublicPort": 8000
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/sdrshark"
+    ],
+    "Image": "sdrshark:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8080,
+        "Type": "tcp",
+        "PublicPort": 8081
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/seerr"
+    ],
+    "Image": "sha256:c92d2dc117f62185e7bcb88cd56efd374ea79210eaf433275449e8d5988eb5a8",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 5055,
+        "Type": "tcp",
+        "PublicPort": 5055
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/sonarr"
+    ],
+    "Image": "lscr.io/linuxserver/sonarr:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8989,
+        "Type": "tcp",
+        "PublicPort": 8989
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/ticketshark"
+    ],
+    "Image": "ticketshark:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8790,
+        "Type": "tcp",
+        "PublicPort": 8790
+      }
+    ],
+    "Labels": {}
+  },
+  {
+    "Names": [
+      "/token-tracker"
+    ],
+    "Image": "token-tracker:latest",
+    "State": "running",
+    "Ports": [
+      {
+        "PrivatePort": 8787,
+        "Type": "tcp",
+        "PublicPort": 8787
+      }
+    ],
+    "Labels": {}
+  }
+]

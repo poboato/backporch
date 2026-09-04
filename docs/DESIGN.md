@@ -295,6 +295,40 @@ thing to get wrong.
 **Cost of change:** the name list and PEM paths are additive — an existing
 configuration with neither behaves exactly as before.
 
+### Discovery offers what is running, but not everything that is running
+Naming every application by hand means remembering what is up and which port each
+answers on, and that is exactly the sort of task that gets done once, badly. Reading
+the container list removes it. But a straight dump of running containers would be a
+worse product than no list at all, because the reader assumes anything offered is
+reasonable to publish.
+
+So discovery is a judgement, not a listing. A read-only Docker socket proxy is
+filtered out entirely — reachable from the internet it is the whole machine, and no
+tick box should be able to select it. Container managers, download clients and host
+metrics pages are offered but flagged with the reason in plain words, and sorted
+last so a quick skim does not meet them first. Known non-HTTP ports are never
+chosen: BitTorrent behind an HTTP proxy connects and then makes no sense, which is
+among the worst things to be asked to diagnose. A container with several web ports
+keeps the rest as alternatives rather than having one guessed silently.
+
+Two details came out of running it against a real machine rather than a fixture.
+The plugin's own server appeared in its own list, suggesting
+`jellyfin.jellyfin.example.com`; it is recognised now by the *container-side* port,
+because the published port is whatever the compose file chose and says nothing about
+what the software is. And stripping suffixes to make names read better turned
+`media-server` into `media`, so only `-ui` and `-app` are dropped — the plainly
+artefactual ones — while `-web` and `-server` stay.
+
+Names are also de-duplicated, which matters more than it looks: two applications
+reducing to one label would be silently collapsed on the certificate, leaving one of
+them unreachable behind a front door that appears to have worked.
+
+The component has no Jellyfin reference at all. Discovery is equally useful to a
+standalone front door, and keeping the dependency out is what allows one
+implementation instead of two.
+**Cost of change:** additive. With no Docker reachable the page says so and names
+are typed by hand, exactly as before.
+
 ## Testing strategy, and what it taught
 
 Three CI jobs, all required: unit tests + package, browser UI test, and

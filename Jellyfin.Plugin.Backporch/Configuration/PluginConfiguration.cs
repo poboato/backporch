@@ -160,6 +160,18 @@ public class PluginConfiguration : BasePluginConfiguration
     public string PemPrivateKeyPath { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets where to reach Docker in order to list the other applications running
+    /// on this machine. Empty means the usual socket path.
+    /// </summary>
+    /// <remarks>
+    /// Either a socket path such as <c>/var/run/docker.sock</c>, or an
+    /// <c>http://host:port</c> address for a read-only socket proxy \u2014 which is the
+    /// better arrangement, because it can be limited to listing containers and nothing
+    /// else. Only ever read from; discovery makes one call, and it is a listing.
+    /// </remarks>
+    public string DockerEndpoint { get; set; } = string.Empty;
+
+    /// <summary>
     /// Gets or sets a value indicating whether the plugin opens the public HTTP port
     /// itself, serving the certificate authority's proof request and redirecting every
     /// other request to HTTPS.
