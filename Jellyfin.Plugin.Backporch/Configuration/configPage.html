@@ -544,6 +544,13 @@
                         line.textContent = '';
                     } else if (check.DomainMatchesPublicIp) {
                         line.innerHTML = '<span class="bp-ok">✓ ' + esc(cfg.Domain) + ' points at this server.</span>';
+                    } else if (check.DomainMatchesPublicIp === null && check.ResolvedAddresses && check.ResolvedAddresses.length) {
+                        // We could not detect this server's own address, so whether the
+                        // domain points here is unknown. Saying otherwise would blame the
+                        // user's DNS for our own failure to reach the address service.
+                        line.innerHTML = '<span class="bp-warn">' + esc(cfg.Domain) + ' resolves to '
+                            + esc(check.ResolvedAddresses.join(', ')) + ", but this server's own public "
+                            + 'address could not be detected, so this could not be checked.</span>';
                     } else if (check.ResolvedAddresses && check.ResolvedAddresses.length) {
                         line.innerHTML = '<span class="bp-warn">The domain currently resolves to '
                             + esc(check.ResolvedAddresses.join(', ')) + ' — not this server yet.</span>';

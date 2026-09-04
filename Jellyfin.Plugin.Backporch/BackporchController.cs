@@ -240,8 +240,13 @@ public class BackporchController : ControllerBase
                 var addresses = await System.Net.Dns.GetHostAddressesAsync(
                     config.Domain, AddressFamily.InterNetwork, cancellationToken).ConfigureAwait(false);
                 dto.ResolvedAddresses = addresses.Select(a => a.ToString()).ToArray();
-                dto.DomainMatchesPublicIp = dto.PublicIp is not null
-                    && dto.ResolvedAddresses.Contains(dto.PublicIp, StringComparer.Ordinal);
+                // Left null, not false, when this server's own address could not be
+                // detected. The comparison is unknowable without it, and "false" is
+                // rendered as "not this server yet" \u2014 a verdict about the user's DNS
+                // drawn from our own failure to reach an address-echo service.
+                dto.DomainMatchesPublicIp = dto.PublicIp is null
+                    ? null
+                    : dto.ResolvedAddresses.Contains(dto.PublicIp, StringComparer.Ordinal);
             }
             catch (SocketException)
             {

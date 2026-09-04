@@ -45,6 +45,8 @@ public enum ChallengeKind
 /// </summary>
 public class PluginConfiguration : BasePluginConfiguration
 {
+    private string _domain = string.Empty;
+
     /// <summary>
     /// Gets or sets how the domain-ownership challenge is answered.
     /// </summary>
@@ -54,7 +56,21 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the fully qualified domain name the certificate is issued for,
     /// for example <c>media.example.com</c>.
     /// </summary>
-    public string Domain { get; set; } = string.Empty;
+    /// <remarks>
+    /// Trimmed on the way in, because this value is read raw in places where padding is
+    /// silently destructive rather than merely untidy: it is the destination of the
+    /// plain-HTTP redirect, where surrounding spaces produce a malformed Location header,
+    /// and it gates whether the challenge listener binds at all, where a padded value
+    /// reads as an invalid hostname and the listener never starts \u2014 leaving an
+    /// issuance that validates happily and then times out with nothing to show for it.
+    /// Normalising here fixes every reader at once, including a hand-edited XML file,
+    /// which the configuration page's own trimming does not reach.
+    /// </remarks>
+    public string Domain
+    {
+        get => _domain;
+        set => _domain = value?.Trim() ?? string.Empty;
+    }
 
     /// <summary>
     /// Gets or sets the additional names carried on the same certificate, one per entry,
