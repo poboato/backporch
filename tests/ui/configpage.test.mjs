@@ -239,6 +239,26 @@ assert(advanced.PublicHttpsPort === 8920, 'public HTTPS port saved');
 assert(advanced.HstsMaxAgeDays === 0, 'a deliberate zero is not replaced by the default');
 assert(advanced.ServeHttpRedirect === true, 'the listener stays on by default');
 
+// The PEM copies are what makes one certificate usable by a proxy in front of
+// everything else, so their paths must survive a save.
+await page.fill('#bpPemCert', '/etc/ssl/backporch/fullchain.pem');
+await page.fill('#bpPemKey', '/etc/ssl/backporch/privkey.pem');
+await page.click('#bpSaveAdvanced');
+await page.waitForTimeout(300);
+const pem = await page.evaluate(() => window.__state.config);
+assert(pem.PemCertificatePath === '/etc/ssl/backporch/fullchain.pem', 'PEM chain path saved');
+assert(pem.PemPrivateKeyPath === '/etc/ssl/backporch/privkey.pem', 'PEM key path saved');
+
+// Extra names: entered one per line, saved as a list, and blank lines dropped.
+await page.fill('#bpExtraDomains', 'home.example.com\n\n  sonarr.example.com  \n');
+await page.click('#bpSaveStep1');
+await page.waitForTimeout(300);
+const names = await page.evaluate(() => window.__saved);
+assert(Array.isArray(names.ExtraDomains), 'extra names saved as a list');
+assert(names.ExtraDomains.length === 2, 'blank lines are dropped, got ' + JSON.stringify(names.ExtraDomains));
+assert(names.ExtraDomains[1] === 'sonarr.example.com', 'names are trimmed');
+assert(names.Domain === 'jellyfin.example.com', 'the primary name is unchanged');
+
 await browser.close();
 if (errors.length) {
   console.error('\nFAILURES:');

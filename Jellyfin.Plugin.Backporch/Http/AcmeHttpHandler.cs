@@ -142,15 +142,16 @@ public sealed class AcmeHttpHandler
     {
         var response = context.Response;
         var config = _configuration();
-        var domain = config?.Domain;
 
-        if (config is null || string.IsNullOrWhiteSpace(domain))
+        if (config is null || string.IsNullOrWhiteSpace(config.Domain))
         {
             // Not configured yet: say nothing rather than guess a destination.
             response.StatusCode = StatusCodes.Status404NotFound;
             response.ContentLength = 0;
             return;
         }
+
+        var domain = DestinationFor(context.Request, config);
 
         var port = config.PublicHttpsPort;
         var authority = port == 443
@@ -166,5 +167,34 @@ public sealed class AcmeHttpHandler
             ? StatusCodes.Status301MovedPermanently
             : StatusCodes.Status308PermanentRedirect;
         response.ContentLength = 0;
+    }
+
+    /// <summary>
+    /// Chooses the name to redirect to: the one that was asked for, when the certificate
+    /// covers it, and the primary name otherwise.
+    /// </summary>
+    /// <remarks>
+    /// One certificate can carry many names, and each has to land back on itself \u2014
+    /// sending a request for one application to another application's address would be
+    /// both wrong and confusing. The requested host is matched against the configured
+    /// names rather than trusted, so this stays an allow list: a request carrying a host
+    /// header for somewhere else cannot turn the listener into an open redirect.
+    /// </remarks>
+    private static string DestinationFor(HttpRequest request, PluginConfiguration config)
+    {
+        var requested = request.Host.Host;
+
+        if (!string.IsNullOrEmpty(requested))
+        {
+            foreach (var name in config.AllDomains())
+            {
+                if (string.Equals(name, requested, StringComparison.OrdinalIgnoreCase))
+                {
+                    return name;
+                }
+            }
+        }
+
+        return config.Domain;
     }
 }

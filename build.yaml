@@ -25,4 +25,6 @@ changelog: |
   renewal task, admin-only API and configuration page. The plain-HTTP port is
   answered by the plugin's own listener, which serves the ownership proof and
   redirects everything else to HTTPS, so opening it never exposes the server;
-  HTTPS responses carry Strict-Transport-Security.
+  HTTPS responses carry Strict-Transport-Security. One certificate can carry
+  several names, and can also be written in PEM form, so a reverse proxy in
+  front of the machine's other applications can use the same certificate.

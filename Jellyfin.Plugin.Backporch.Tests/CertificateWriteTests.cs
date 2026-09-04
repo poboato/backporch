@@ -10,14 +10,14 @@ namespace Jellyfin.Plugin.Backporch.Tests;
 /// </summary>
 public class CertificateWriteTests
 {
-    private static Task WriteAsync(string path, byte[] pfx)
+    private static Task WriteAsync(string path, byte[] pfx, bool secret = true)
     {
         var method = typeof(AcmeService).GetMethod(
             "WriteCertificateAsync",
             BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new InvalidOperationException("WriteCertificateAsync is missing.");
 
-        return (Task)method.Invoke(null, new object[] { path, pfx, CancellationToken.None })!;
+        return (Task)method.Invoke(null, new object[] { path, pfx, secret, CancellationToken.None })!;
     }
 
     private static string NewDirectory()

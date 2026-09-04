@@ -57,6 +57,20 @@ public class PluginConfiguration : BasePluginConfiguration
     public string Domain { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets the additional names carried on the same certificate, one per entry,
+    /// for example <c>home.example.com</c> and <c>sonarr.example.com</c>.
+    /// </summary>
+    /// <remarks>
+    /// A certificate may carry many names, so one issuance can cover every application
+    /// served from a single machine. Each name is proven separately — the certificate
+    /// authority opens an authorization per name — which is why every one of them must
+    /// resolve to this host before a request is made. <see cref="Domain"/> stays the
+    /// primary name: it is the certificate's common name and the destination used when
+    /// a plain-HTTP request arrives for a name that is not recognised.
+    /// </remarks>
+    public List<string> ExtraDomains { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets the contact address registered with the ACME account. Let's Encrypt
     /// uses it only for expiry warnings.
     /// </summary>
@@ -120,6 +134,30 @@ public class PluginConfiguration : BasePluginConfiguration
     /// means also entering it under Networking &#8594; Certificate password.
     /// </summary>
     public string CertificatePassword { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets where to also write the certificate chain in PEM form. Empty to skip.
+    /// </summary>
+    /// <remarks>
+    /// A PKCS#12 bundle is what .NET's own web server reads, but almost nothing else
+    /// does: nginx, Apache, HAProxy and Caddy all want PEM. Writing both lets one
+    /// issuance serve this application and a reverse proxy sitting in front of every
+    /// other application on the same machine. The file holds only public certificates,
+    /// so it is written world-readable \u2014 the proxy usually runs as another user.
+    /// </remarks>
+    public string PemCertificatePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets where to also write the private key in PEM form. Empty to skip.
+    /// </summary>
+    /// <remarks>
+    /// Unencrypted, because that is the only form a reverse proxy can read without a
+    /// passphrase prompt at every start. It is created readable only by the account
+    /// that owns this process; anything that needs it, such as a proxy running as a
+    /// different user, should be given access through group ownership on the containing
+    /// directory rather than by widening the file.
+    /// </remarks>
+    public string PemPrivateKeyPath { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets a value indicating whether the plugin opens the public HTTP port
@@ -206,5 +244,32 @@ public class PluginConfiguration : BasePluginConfiguration
         var json = JsonSerializer.Serialize(this);
         return JsonSerializer.Deserialize<PluginConfiguration>(json)
             ?? throw new InvalidOperationException("Could not copy the plugin configuration.");
+    }
+
+    /// <summary>
+    /// Gets every name the certificate should carry: the primary name first, then any
+    /// extras, with blanks and repeats removed. A fresh list each call, so a caller may
+    /// hand it straight to the certificate authority client without copying.
+    /// </summary>
+    /// <remarks>
+    /// Order matters. The first name becomes the certificate's common name, and a
+    /// duplicate identifier makes the certificate authority reject the whole order, so
+    /// both are settled here rather than at each call site.
+    /// </remarks>
+    public List<string> AllDomains()
+    {
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var candidate in new[] { Domain }.Concat(ExtraDomains ?? new List<string>()))
+        {
+            var name = candidate?.Trim();
+            if (!string.IsNullOrEmpty(name) && seen.Add(name))
+            {
+                names.Add(name);
+            }
+        }
+
+        return names;
     }
 }

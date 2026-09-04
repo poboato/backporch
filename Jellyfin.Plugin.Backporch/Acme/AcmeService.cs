@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using Certes;
 using Certes.Acme;
 using Certes.Acme.Resource;
@@ -261,15 +262,22 @@ public sealed class AcmeService
             return "No domain configured.";
         }
 
-        if (!IsValidHostname(config.Domain))
+        // Every name on the certificate is validated the same way. One bad entry fails
+        // the whole order at the certificate authority, so it is worth naming the exact
+        // offender here rather than letting the CA answer with an identifier error.
+        foreach (var name in config.AllDomains())
         {
-            return "Domain is not a valid hostname — enter it as a bare name like "
-                + "media.example.com, with no scheme, port, or path.";
-        }
+            if (name.Contains('*', StringComparison.Ordinal))
+            {
+                return "Wildcard certificates are not supported \u2014 remove " + name
+                    + " and list each name in full instead.";
+            }
 
-        if (config.Domain.Contains('*', StringComparison.Ordinal))
-        {
-            return "Wildcard certificates are not supported.";
+            if (!IsValidHostname(name))
+            {
+                return name + " is not a valid hostname \u2014 enter each name in full, "
+                    + "like media.example.com, with no scheme, port, or path.";
+            }
         }
 
         if (string.IsNullOrWhiteSpace(config.AccountEmail))
@@ -364,6 +372,13 @@ public sealed class AcmeService
         var test = config.Clone();
         test.UseStaging = true;
         test.CertificatePath = config.CertificatePath + ".test";
+
+        // A rehearsal must not publish. The staging certificate is signed by a root no
+        // browser trusts, so letting it land on the PEM paths would hand a reverse proxy
+        // serving every other application a certificate that fails on every device the
+        // moment it reloaded. The rehearsal only needs to prove the challenge answers.
+        test.PemCertificatePath = string.Empty;
+        test.PemPrivateKeyPath = string.Empty;
         return test;
     }
 
@@ -470,7 +485,12 @@ public sealed class AcmeService
         var acme = await GetOrCreateAccountAsync(config, directory, acmeHttpClient, cancellationToken).ConfigureAwait(false);
 
         _state.Report(IssuancePhase.PublishingDns, "Creating the certificate order…");
-        var order = await acme.NewOrder(new[] { config.Domain }).ConfigureAwait(false);
+        // One order, every name. The certificate authority opens an authorization per
+        // name and the loop below answers each in turn; a single HTTP-01 listener can
+        // satisfy all of them, because every name resolves to this same host.
+        var domains = config.AllDomains();
+        _logger.LogInformation("Ordering a certificate for {Count} name(s)", domains.Count);
+        var order = await acme.NewOrder(domains).ConfigureAwait(false);
         var authorizations = await order.Authorizations().ConfigureAwait(false);
 
         var placedRecords = new List<string>();
@@ -511,7 +531,9 @@ public sealed class AcmeService
 
             _state.Report(IssuancePhase.Finalizing, "Downloading the certificate…");
             var privateKey = KeyFactory.NewKey(KeyAlgorithm.ES256);
-            var chain = await order.Generate(new CsrInfo { CommonName = config.Domain }, privateKey)
+            // The common name is the primary name; Certes adds every other identifier on
+            // the order to the request as a subject alternative name.
+            var chain = await order.Generate(new CsrInfo { CommonName = domains[0] }, privateKey)
                 .ConfigureAwait(false);
 
             // Assemble the PKCS#12 with .NET's own crypto from exactly the chain the CA
@@ -521,7 +543,9 @@ public sealed class AcmeService
             var pfx = BuildPfx(chain, privateKey, config.CertificatePassword);
 
             _state.Report(IssuancePhase.WritingCertificate, "Writing the certificate to disk…");
-            await WriteCertificateAsync(config.CertificatePath, pfx, cancellationToken).ConfigureAwait(false);
+            await WriteCertificateAsync(config.CertificatePath, pfx, secret: true, cancellationToken)
+                .ConfigureAwait(false);
+            await WritePemAsync(config, chain, privateKey, cancellationToken).ConfigureAwait(false);
 
             using var issued = X509CertificateLoader.LoadPkcs12(pfx, config.CertificatePassword);
             return issued.NotAfter.ToUniversalTime();
@@ -745,7 +769,74 @@ public sealed class AcmeService
     /// Writes the bundle to a temporary file, restricts it to the server account, then
     /// moves it into place — so a reader never observes a half-written certificate.
     /// </summary>
-    private static async Task WriteCertificateAsync(string path, byte[] pfx, CancellationToken cancellationToken)
+    /// <summary>
+    /// Writes the chain and key in PEM form for a reverse proxy to read, when paths for
+    /// them are configured.
+    /// </summary>
+    /// <remarks>
+    /// The certificate goes out as leaf first and then each issuer, which is the order
+    /// every proxy expects; a chain assembled the other way round is accepted by the
+    /// proxy at start and then rejected by clients, which is a miserable thing to
+    /// diagnose. Failing to write these must not fail an issuance that has already
+    /// succeeded \u2014 the certificate is on disk and valid \u2014 so a problem here is
+    /// reported and swallowed.
+    /// </remarks>
+    private async Task WritePemAsync(
+        PluginConfiguration config,
+        CertificateChain chain,
+        IKey privateKey,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(config.PemCertificatePath)
+            && string.IsNullOrWhiteSpace(config.PemPrivateKeyPath))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(config.PemCertificatePath))
+            {
+                var pem = new StringBuilder();
+                pem.Append(chain.Certificate.ToPem());
+
+                foreach (var issuer in chain.Issuers)
+                {
+                    pem.Append(issuer.ToPem());
+                }
+
+                await WriteCertificateAsync(
+                    config.PemCertificatePath,
+                    Encoding.ASCII.GetBytes(pem.ToString()),
+                    secret: false,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrWhiteSpace(config.PemPrivateKeyPath))
+            {
+                await WriteCertificateAsync(
+                    config.PemPrivateKeyPath,
+                    Encoding.ASCII.GetBytes(privateKey.ToPem()),
+                    secret: true,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            _logger.LogInformation("Wrote the certificate in PEM form for a reverse proxy");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError(
+                ex,
+                "The certificate was issued, but writing the PEM copy failed. A reverse "
+                + "proxy reading those files will keep serving the previous certificate.");
+        }
+    }
+
+    private static async Task WriteCertificateAsync(
+        string path,
+        byte[] content,
+        bool secret,
+        CancellationToken cancellationToken)
     {
         var parent = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(parent))
@@ -782,7 +873,10 @@ public sealed class AcmeService
 
         if (!OperatingSystem.IsWindows())
         {
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            options.UnixCreateMode = secret
+                ? UnixFileMode.UserRead | UnixFileMode.UserWrite
+                : UnixFileMode.UserRead | UnixFileMode.UserWrite
+                    | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
         }
 
         try
@@ -790,7 +884,7 @@ public sealed class AcmeService
             var stream = new FileStream(temp, options);
             await using (stream.ConfigureAwait(false))
             {
-                await stream.WriteAsync(pfx, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(content, cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
 

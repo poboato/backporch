@@ -252,6 +252,49 @@ promises about names this plugin neither owns nor can verify.
 **Cost of change:** turning it off is safe; *shortening* it does not reach
 browsers that already cached the longer value.
 
+### Many names on one certificate, and a PEM copy for whatever is in front
+A certificate can carry many names, and a self-hosted machine almost never runs
+one application. Ordering `jellyfin.example.com`, `home.example.com` and
+`sonarr.example.com` together means one issuance, one renewal, and one thing to
+get wrong instead of three. The certificate authority opens an authorization per
+name, but they can all be answered by the single port-80 listener, because every
+name resolves to the same host — so the multi-name case costs nothing extra at
+the front door.
+
+Wildcards stay refused. They would cover the same ground, but only through
+DNS-01, which means a credential on disk; the explicit list needs none. The
+refusal now names the offending entry, because "domain is not a valid hostname"
+is unhelpful when the domain is fine and the fourth line of the list is not.
+
+Names are de-duplicated case-insensitively before the order is placed: a
+repeated identifier makes the CA reject the *whole* order, so a name typed twice
+must never reach it. The first name stays the common name, and the order of the
+rest is preserved.
+
+The output format was the other half. A PKCS#12 is what Kestrel reads and what
+almost nothing else does — nginx, Apache, HAProxy and Caddy all want PEM. So the
+PEM pair is written alongside it when paths are configured: the chain
+world-readable (it is public, and the proxy runs as another user), the key
+`0600` from creation via the same routine that writes the PKCS#12, so the
+"created restricted, never restricted afterwards" property extends to it for
+free.
+
+Two failure modes were designed out rather than documented around. The guided
+rehearsal issues from *staging*, whose root no browser trusts — it clones the
+configuration and blanks the PEM paths, because publishing there would hand a
+proxy serving every other application a certificate that fails on every device
+at its next reload. And a plain-HTTP request now redirects to the name it asked
+for rather than always to the primary, matched against the configured list so
+it stays an allow list and not an open redirect; without that, a request for one
+application would land on another application's address.
+
+**Not done here, deliberately:** reloading the proxy. Nothing configured through
+a web form should be able to run a command as the account hosting the media
+server. A systemd path unit watching the PEM file is simpler and a far smaller
+thing to get wrong.
+**Cost of change:** the name list and PEM paths are additive — an existing
+configuration with neither behaves exactly as before.
+
 ## Testing strategy, and what it taught
 
 Three CI jobs, all required: unit tests + package, browser UI test, and

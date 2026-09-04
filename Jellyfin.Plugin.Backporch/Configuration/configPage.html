@@ -121,6 +121,17 @@
                         </div>
                     </div>
                     <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpExtraDomains">Other addresses on the same certificate (optional)</label>
+                        <textarea is="emby-textarea" id="bpExtraDomains" rows="3" class="emby-textarea" placeholder="home.example.com&#10;sonarr.example.com"></textarea>
+                        <div class="fieldDescription">
+                            One per line. One certificate can cover several addresses, so a reverse
+                            proxy in front of your other applications can use the same certificate
+                            instead of needing one each. <strong>Every address you list must already
+                            point at this server</strong> &mdash; each is checked separately, and one
+                            that does not resolve fails the whole request.
+                        </div>
+                    </div>
+                    <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="bpEmail">Email</label>
                         <input is="emby-input" type="email" id="bpEmail" autocomplete="off" />
                         <div class="fieldDescription">Only used by Let's Encrypt to warn you if renewal ever breaks.</div>
@@ -285,6 +296,25 @@
                         <label class="inputLabel inputLabelUnfocused" for="bpCertPathInput">Certificate file path</label>
                         <input is="emby-input" type="text" id="bpCertPathInput" autocomplete="off" />
                         <div class="fieldDescription">Leave empty to use the default inside Jellyfin's data directory.</div>
+                    </div>
+                    <h3 class="checkboxListLabel" style="margin-top:1.5em;">Copies for a reverse proxy</h3>
+                    <div class="fieldDescription" style="margin-bottom:0.6em;">
+                        Jellyfin reads the certificate above, but nginx, Apache, HAProxy and Caddy
+                        all want PEM instead. Fill these in to write a copy in that form on every
+                        renewal, so a proxy serving your other applications stays current too.
+                        Leave empty to write nothing.
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpPemCert">Certificate chain (PEM) path</label>
+                        <input is="emby-input" type="text" id="bpPemCert" autocomplete="off" placeholder="/etc/ssl/backporch/fullchain.pem" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpPemKey">Private key (PEM) path</label>
+                        <input is="emby-input" type="text" id="bpPemKey" autocomplete="off" placeholder="/etc/ssl/backporch/privkey.pem" />
+                        <div class="fieldDescription">
+                            Written readable only by the account running this server. Give the proxy
+                            access through the containing directory rather than widening this file.
+                        </div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="bpRenewDays">Renew this many days before expiry</label>
@@ -653,6 +683,10 @@
             function readForm() {
                 var proof = proofValue();
                 cfg.Domain = q('#bpDomain').value.trim();
+                cfg.ExtraDomains = q('#bpExtraDomains').value
+                    .split('\n')
+                    .map(function (n) { return n.trim(); })
+                    .filter(function (n) { return n.length > 0; });
                 cfg.AccountEmail = q('#bpEmail').value.trim();
                 cfg.Challenge = proof === 'Http' ? 'Http' : 'Dns';
                 if (proof !== 'Http') { cfg.DnsProvider = proof; }
@@ -662,6 +696,8 @@
                 // the box happened to show, so it only counts once the user moves it.
                 if (stagingTouched) { cfg.UseStaging = q('#bpUseStaging').checked; }
                 cfg.CertificatePath = q('#bpCertPathInput').value.trim();
+                cfg.PemCertificatePath = q('#bpPemCert').value.trim();
+                cfg.PemPrivateKeyPath = q('#bpPemKey').value.trim();
                 cfg.RenewDaysBeforeExpiry = parseInt(q('#bpRenewDays').value, 10) || 30;
                 cfg.DnsPropagationSeconds = parseInt(q('#bpPropagation').value, 10) || 60;
                 cfg.DirectoryUrl = q('#bpDirectoryUrl').value.trim();
@@ -693,12 +729,15 @@
 
             function fillForm() {
                 q('#bpDomain').value = cfg.Domain || '';
+                q('#bpExtraDomains').value = (cfg.ExtraDomains || []).join('\n');
                 q('#bpEmail').value = cfg.AccountEmail || '';
                 q('#bpProvider').value = proofFromConfig(cfg);
                 q('#bpToken').value = cfg.DnsApiToken || '';
                 q('#bpUseStaging').checked = !!cfg.UseStaging;
                 stagingTouched = false;
                 q('#bpCertPathInput').value = cfg.CertificatePath || '';
+                q('#bpPemCert').value = cfg.PemCertificatePath || '';
+                q('#bpPemKey').value = cfg.PemPrivateKeyPath || '';
                 q('#bpRenewDays').value = cfg.RenewDaysBeforeExpiry || 30;
                 q('#bpPropagation').value = cfg.DnsPropagationSeconds || 60;
                 q('#bpDirectoryUrl').value = cfg.DirectoryUrl || '';

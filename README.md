@@ -64,9 +64,46 @@ against — is recorded in [docs/DESIGN.md](docs/DESIGN.md).)
 3. The certificate and key are written atomically to a PKCS#12 file with
    owner-only permissions. The path defaults to Jellyfin's own data directory;
    no password is set on the bundle — one would have to be stored in plain text
-   beside it anyway, so the `0600` file mode is the real boundary.
+   beside it anyway, so the `0600` file mode is the real boundary. A PEM copy
+   is written too when paths for one are configured, because that is the form
+   every reverse proxy reads.
 4. A daily scheduled task renews when expiry is inside the threshold
    (default 30 days). Renewal does nothing when the certificate is healthy.
+
+## One certificate for every application on the machine
+
+A certificate may carry many names, and Backporch will put as many on it as you
+list — a primary name under **Your address**, and any others one per line
+beneath it. Each name is proven separately (the CA opens an authorization per
+name), but all of them are answered by the same port-80 listener, because they
+all resolve to the same host. So a single request covers
+`jellyfin.example.com`, `home.example.com` and `sonarr.example.com` at once.
+
+That only helps if something can *use* the result, and Jellyfin's PKCS#12 is not
+a format nginx, Apache, HAProxy or Caddy can read. Set the two **PEM** paths
+under Advanced and every issuance also writes:
+
+- the chain, leaf first then issuers, world-readable — it is all public anyway,
+  and the proxy usually runs as a different user;
+- the private key, created `0600` from the outset, never chmod-ed into place.
+
+The proxy in front of your other applications then reads the same certificate
+this server uses. Give it access through group ownership on the containing
+directory rather than by widening the key.
+
+Two things worth knowing before you rely on it:
+
+- **Every name must already resolve to this host** before you request the
+  certificate. One that does not fails the whole order, not just its own name.
+- **A rehearsal never writes the PEM copies.** The guided flow's practice run
+  issues from Let's Encrypt's staging environment, whose root no browser trusts;
+  if it published, your proxy would serve an untrusted certificate at its next
+  reload. The rehearsal proves the challenge answers and writes nothing else.
+
+Backporch does not reload the proxy itself. Nothing configured through a web
+form should be able to run a command as the account hosting the media server —
+a systemd path unit watching the PEM file, or a timer, is both simpler and a far
+smaller thing to get wrong.
 
 ## Security posture
 
@@ -221,6 +258,15 @@ And against Let's Encrypt's **Pebble** test CA (real ACME, no real DNS):
   owner-only permissions that matches the hostname. This runs in CI on every
   push.
 
+- **One certificate for three names** — `jellyfin.multi.test`,
+  `home.multi.test` and `sonarr.multi.test` ordered together, each one's
+  authorization answered by the same single listener, and the issued
+  certificate confirmed to match all three and to *not* match a fourth name
+  that was never ordered. The PEM copies are checked in the same run: the chain
+  contains its issuer as well as the leaf (a chain missing it is accepted by a
+  proxy at start and rejected by clients afterwards), the key file is `0600`,
+  and the chain file is readable by the proxy's account.
+
 - Re-issuing immediately for the same domain against a CA that reuses
   authorizations (`PEBBLE_AUTHZREUSE=100`), which is what Let's Encrypt does
   for about 30 days — the case that must skip challenge validation rather than
@@ -230,15 +276,18 @@ And the guided setup page itself, in headless Chromium
 (`tests/ui/configpage.test.mjs`, also in CI): step locking and unlocking, the
 A-record display with the detected public IP, the live DNS check, both DNS
 modes, the manual TXT-record card with its confirmation handshake, progress
-labels during a practice run, and the success banner into step 5.
+labels during a practice run, the success banner into step 5, and the
+round-trip of the extra-name list (blank lines dropped, entries trimmed) and
+the PEM paths.
 
 Not yet exercised: Let's Encrypt staging with a real domain, and the Cloudflare
 API against a live zone.
 
 ## Known limitations
 
-- One domain, one certificate. No wildcard or SAN list yet (wildcards would
-  require DNS-01).
+- No wildcard certificates. Several explicit names on one certificate *are*
+  supported (see below); a wildcard would require DNS-01 and a credential, and
+  the explicit list covers the same ground without one.
 - HTTP-01 needs port 80 reachable from the internet at issuance and renewal
   time, and assumes Jellyfin is served at the domain's root (no reverse-proxy
   path prefix in front of the well-known route).
