@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Backporch.Docker;
@@ -39,8 +40,14 @@ public static class AppDiscovery
     /// </summary>
     private static readonly (string Match, string Reason)[] _neverExpose =
     {
-        ("docker-socket-proxy", "it is the Docker API — anyone reaching it can read every container on this machine"),
+        // Matched loosely on purpose. Every published socket proxy image names itself
+        // "socket-proxy" somewhere (tecnativa, linuxserver, wollomatic, 11notes), and a
+        // name this branch fails to recognise is offered a public name like any other
+        // application — which is the one outcome this list exists to prevent.
+        ("socket-proxy", "it is the Docker API — anyone reaching it can read every container on this machine"),
+        ("socketproxy", "it is the Docker API — anyone reaching it can read every container on this machine"),
         ("dockerproxy", "it is the Docker API — anyone reaching it can read every container on this machine"),
+        ("docker-api", "it is the Docker API — anyone reaching it controls this machine"),
         ("docker.sock", "it is the Docker API — anyone reaching it controls this machine"),
         ("traefik", "a front door published through another front door loops back on itself")
     };
@@ -117,8 +124,12 @@ public static class AppDiscovery
             .GroupBy(p => p.PublicPort!.Value)
             .ToDictionary(g => g.Key, g => g.First().PrivatePort);
 
-        var serveable = published.Keys
-            .Where(p => !_notHttp.ContainsKey(p))
+        // Both ends of the mapping have to be checked. What the software speaks is
+        // decided by the container-side port, and "51413:6881" or "2222:22" publishes it
+        // on a host port that is in no well-known table at all.
+        var serveable = published
+            .Where(p => !_notHttp.ContainsKey(p.Key) && !_notHttp.ContainsKey(p.Value))
+            .Select(p => p.Key)
             .OrderBy(p => p)
             .ToList();
 
@@ -210,14 +221,19 @@ public static class AppDiscovery
             }
         }
 
-        // A DNS label caps at 63 characters, and a truncation must not end on a hyphen.
-        if (label.Length > 63)
-        {
-            label = label[..63].TrimEnd('-');
-        }
-
-        return label;
+        return Cap(label);
     }
+
+    /// <summary>
+    /// Trims a label to what DNS allows: 63 characters, never ending on a hyphen.
+    /// </summary>
+    /// <remarks>
+    /// Every path that produces a label has to go through this. One illegal identifier
+    /// fails the entire certificate order at the authority, not merely its own name, so
+    /// a single over-long container name would cost the user every other application.
+    /// </remarks>
+    private static string Cap(string label)
+        => label.Length <= 63 ? label : label[..63].TrimEnd('-');
 
     /// <summary>
     /// Keeps two applications from suggesting the same name.
@@ -230,31 +246,51 @@ public static class AppDiscovery
     /// </remarks>
     private static IReadOnlyList<DiscoveredApp> Disambiguate(List<DiscoveredApp> apps)
     {
-        var byLabel = apps.GroupBy(a => a.SuggestedLabel, StringComparer.OrdinalIgnoreCase);
-        var settled = new List<DiscoveredApp>(apps.Count);
+        var proposed = new List<(DiscoveredApp App, string Label)>(apps.Count);
 
-        foreach (var group in byLabel)
+        foreach (var group in apps.GroupBy(a => a.SuggestedLabel, StringComparer.OrdinalIgnoreCase))
         {
             if (group.Count() == 1)
             {
-                settled.Add(group.First());
+                var only = group.First();
+                proposed.Add((only, only.SuggestedLabel));
                 continue;
             }
 
             foreach (var app in group)
             {
-                settled.Add(new DiscoveredApp
-                {
-                    Container = app.Container,
-                    Image = app.Image,
-                    Port = app.Port,
-                    ContainerPort = app.ContainerPort,
-                    AlternatePorts = app.AlternatePorts,
-                    SuggestedLabel = SanitiseExact(app.Container),
-                    Risk = app.Risk,
-                    RiskReason = app.RiskReason
-                });
+                proposed.Add((app, SanitiseExact(app.Container)));
             }
+        }
+
+        // Falling back to the container name can collide in its own right: "foo-ui" and
+        // "foo_ui" are both legal Docker names and both sanitise to "foo-ui". So a
+        // counting suffix has the last word, and nothing leaves here sharing a label.
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var settled = new List<DiscoveredApp>(apps.Count);
+
+        foreach (var (app, label) in proposed)
+        {
+            var unique = label;
+            var next = 2;
+
+            while (!used.Add(unique))
+            {
+                unique = WithSuffix(label, "-" + next.ToString(CultureInfo.InvariantCulture));
+                next++;
+            }
+
+            settled.Add(new DiscoveredApp
+            {
+                Container = app.Container,
+                Image = app.Image,
+                Port = app.Port,
+                ContainerPort = app.ContainerPort,
+                AlternatePorts = app.AlternatePorts,
+                SuggestedLabel = unique,
+                Risk = app.Risk,
+                RiskReason = app.RiskReason
+            });
         }
 
         // Ordinary applications first, then the ones that need a second thought, and
@@ -263,6 +299,17 @@ public static class AppDiscovery
             .OrderBy(a => (int)a.Risk)
             .ThenBy(a => a.SuggestedLabel, StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>
+    /// Appends a distinguishing suffix, making room for it inside the 63-character limit
+    /// rather than overrunning it.
+    /// </summary>
+    private static string WithSuffix(string label, string suffix)
+    {
+        var room = 63 - suffix.Length;
+        var head = label.Length <= room ? label : label[..room].TrimEnd('-');
+        return head + suffix;
     }
 
     private static string SanitiseExact(string containerName)
@@ -281,6 +328,6 @@ public static class AppDiscovery
             }
         }
 
-        return builder.ToString().Trim('-');
+        return Cap(builder.ToString().Trim('-'));
     }
 }

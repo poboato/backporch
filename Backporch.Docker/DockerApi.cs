@@ -47,8 +47,23 @@ public sealed class DockerApi : IDisposable
                 ConnectCallback = async (_, cancellationToken) =>
                 {
                     var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                    await socket.ConnectAsync(new UnixDomainSocketEndPoint(path), cancellationToken)
-                        .ConfigureAwait(false);
+
+                    try
+                    {
+                        await socket.ConnectAsync(new UnixDomainSocketEndPoint(path), cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // A missing socket path and a refused permission are the ordinary
+                        // cases here, not the exceptional ones — the caller expects both
+                        // and reports them. Without this the handle survives until the
+                        // finalizer runs, so a page reloaded against a bad endpoint leaks
+                        // one per attempt.
+                        socket.Dispose();
+                        throw;
+                    }
+
                     return new NetworkStream(socket, ownsSocket: true);
                 }
             };

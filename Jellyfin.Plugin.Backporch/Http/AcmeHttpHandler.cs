@@ -132,10 +132,15 @@ public sealed class AcmeHttpHandler
     }
 
     /// <summary>
-    /// Sends the caller to HTTPS. The host in the <c>Location</c> header is always the
-    /// configured domain, never the request's own <c>Host</c> header — an open redirect on
-    /// an unauthenticated internet-facing port is worth nothing to anyone but an attacker.
+    /// Sends the caller to HTTPS, at the name that was asked for.
     /// </summary>
+    /// <remarks>
+    /// The host in the <c>Location</c> header is only ever a name from the configured
+    /// list — matched against it, never echoed from the request — because an open
+    /// redirect on an unauthenticated internet-facing port is worth nothing to anyone but
+    /// an attacker. A request for a host that is not on the list is sent to the primary
+    /// name rather than refused, which keeps a bare IP or a stale name working.
+    /// </remarks>
     /// <param name="context">The request context.</param>
     /// <param name="isRead">Whether the request was a GET or HEAD.</param>
     private void Redirect(HttpContext context, bool isRead)

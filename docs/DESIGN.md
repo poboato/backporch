@@ -295,6 +295,28 @@ thing to get wrong.
 **Cost of change:** the name list and PEM paths are additive — an existing
 configuration with neither behaves exactly as before.
 
+### Renewal is decided by coverage as well as by expiry
+Expiry was the only question worth asking while a certificate carried one name that
+could never change. Once names can be added after issuance it stops being enough:
+the certificate on disk can be valid for another two months and still not cover
+what was asked for. So renewal now also asks whether every configured name is on
+the certificate, read from the file itself rather than remembered alongside it —
+that stays right for a file this plugin did not write, and across an upgrade from a
+version that recorded nothing.
+
+A file that cannot be read is deliberately *not* treated as covering nothing. That
+reading would be the more suspicious one, but it would also re-issue on every check
+for as long as the file stayed unreadable, spending the authority's rate limit over
+something we cannot even open. Expiry has the last word when the names are
+unknowable.
+
+The names are memoised against the file's identity, because the setup page polls
+status every two seconds during a run and opening a PKCS#12 puts the password
+through a key derivation each time.
+**Cost of change:** dropping the coverage check returns the previous behaviour
+exactly, at the price of a name that is configured, displayed as covered, and
+serving nothing.
+
 ### Discovery offers what is running, but not everything that is running
 Naming every application by hand means remembering what is up and which port each
 answers on, and that is exactly the sort of task that gets done once, badly. Reading

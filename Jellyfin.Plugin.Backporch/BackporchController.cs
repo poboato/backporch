@@ -168,11 +168,18 @@ public class BackporchController : ControllerBase
             }).ToList();
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException
-            or UnauthorizedAccessException or SocketException or NotSupportedException)
+            or UnauthorizedAccessException or SocketException or NotSupportedException
+            or TaskCanceledException or JsonException or FormatException)
         {
             // Not being able to see Docker is ordinary - there may be none, or no
             // permission to its socket. It is not an error worth failing the page over,
             // so say what happened and let the names be typed by hand.
+            //
+            // The last three are what a misconfigured endpoint actually throws, and
+            // leaving them out turned every one of them into a 500 with no explanation:
+            // a firewalled host times out (TaskCanceledException), something that is not
+            // Docker answers with something that is not JSON, and a half-typed address
+            // fails to parse into a URI before a request is ever made.
             _logger.LogInformation(ex, "Could not list containers for discovery");
             dto.Problem = "Could not read the container list from " + endpoint
                 + ". Add the names by hand, or point this at a Docker socket under Advanced.";

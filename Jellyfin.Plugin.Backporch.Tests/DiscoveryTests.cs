@@ -12,14 +12,14 @@ namespace Jellyfin.Plugin.Backporch.Tests;
 /// </summary>
 public class DiscoveryTests
 {
-    private static IReadOnlyList<DiscoveredApp> FromFixture()
+    private static List<ContainerSummary> Fixture()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "containers.json");
-        var containers = JsonSerializer.Deserialize<List<ContainerSummary>>(File.ReadAllText(path))
+        return JsonSerializer.Deserialize<List<ContainerSummary>>(File.ReadAllText(path))
             ?? throw new InvalidOperationException("fixture did not parse");
-
-        return AppDiscovery.Find(containers);
     }
+
+    private static IReadOnlyList<DiscoveredApp> FromFixture() => AppDiscovery.Find(Fixture());
 
     private static DiscoveredApp? Find(string label)
         => FromFixture().FirstOrDefault(a => a.SuggestedLabel == label);
@@ -43,8 +43,18 @@ public class DiscoveryTests
     [Fact]
     public void TheDockerApiIsNeverOffered()
     {
+        // The captured listing has the proxy publishing nothing, which would have made
+        // this pass on the port rules alone and prove nothing about the name rules. It is
+        // given a published port here so that only the never-expose list can exclude it.
+        var containers = Fixture();
+        var proxy = containers.Single(c => c.Name.Contains("dockerproxy", StringComparison.OrdinalIgnoreCase));
+        proxy.Ports = new List<ContainerPort>
+        {
+            new() { PublicPort = 2375, PrivatePort = 2375, Type = "tcp" }
+        };
+
         Assert.DoesNotContain(
-            FromFixture(),
+            AppDiscovery.Find(containers),
             a => a.Container.Contains("dockerproxy", StringComparison.OrdinalIgnoreCase));
     }
 
