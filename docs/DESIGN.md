@@ -124,10 +124,13 @@ third-party descriptions of it contradict each other. A silently-wrong prefill
 is worse than a manual step, so the page links the official token page and
 names the built-in **"Edit zone DNS"** template instead.
 
-### Packaging ships exactly three assemblies
-`package.sh` ships the plugin DLL + Certes + BouncyCastle, nothing else.
-`dotnet publish` output includes Jellyfin's own assemblies, which must never
-ship inside a plugin (ABI clashes at load).
+### Packaging ships exactly five assemblies
+`package.sh` ships the plugin DLL + Backporch.Docker + Certes + BouncyCastle +
+Newtonsoft.Json, nothing else. `dotnet publish` output includes Jellyfin's own
+assemblies, which must never ship inside a plugin (ABI clashes at load). The count
+is in the heading deliberately: it is a number that must be changed on purpose, and
+a plugin that silently gained a dependency is exactly what this rule exists to
+catch.
 
 ### Target framework is net9.0
 Jellyfin 10.11.x runs on net9 — jellyfin *master* is net10, and building
