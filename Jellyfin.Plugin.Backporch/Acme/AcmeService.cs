@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using Certes;
 using Certes.Acme;
 using Certes.Acme.Resource;
@@ -234,19 +236,143 @@ public sealed class AcmeService
     }
 
     /// <summary>
-    /// Reports whether the certificate on disk is missing, unreadable, or close enough
-    /// to expiry to warrant renewal.
+    /// Memoised result of reading a certificate's names. See <see cref="ReadNames"/>.
+    /// </summary>
+    private static CertificateNames? _certificateNames;
+
+    /// <summary>
+    /// Reports whether the certificate on disk is missing, unreadable, no longer covers
+    /// every configured name, or is close enough to expiry to warrant renewal.
     /// </summary>
     /// <param name="config">Plugin configuration.</param>
     /// <returns><c>true</c> when a renewal should be attempted.</returns>
     public static bool NeedsRenewal(PluginConfiguration config)
     {
+        ArgumentNullException.ThrowIfNull(config);
+
         if (!File.Exists(config.CertificatePath) || config.CertificateExpiryUtc is null)
         {
             return true;
         }
 
+        // A name added after the last issuance is not on the certificate, and expiry
+        // alone will not notice for another two months. Without this the renewal task
+        // answers "valid for another 80 days" every day while the new name serves
+        // nothing — which looks like a proxy fault, not a missing name.
+        if (MissingNames(config).Count > 0)
+        {
+            return true;
+        }
+
         return DateTime.UtcNow.AddDays(config.RenewDaysBeforeExpiry) >= config.CertificateExpiryUtc.Value;
+    }
+
+    /// <summary>
+    /// Reports which configured names are absent from the certificate currently on disk.
+    /// </summary>
+    /// <remarks>
+    /// Read from the certificate itself rather than remembered in configuration, so it
+    /// stays truthful for a file this plugin did not write and across an upgrade from a
+    /// version that recorded nothing. A file that cannot be read yields an empty list on
+    /// purpose: the caller then falls back to expiry, because renewing on every check
+    /// would spend the authority's rate limit over a file we cannot even parse.
+    /// </remarks>
+    /// <param name="config">Plugin configuration.</param>
+    /// <returns>The configured names missing from the certificate, if any.</returns>
+    public static IReadOnlyList<string> MissingNames(PluginConfiguration config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var wanted = config.AllDomains();
+        if (wanted.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var present = ReadNames(config);
+        if (present is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        return wanted.Where(name => !present.Contains(name)).ToList();
+    }
+
+    /// <summary>
+    /// The names on the certificate at a path, or <c>null</c> when it cannot be read.
+    /// </summary>
+    /// <remarks>
+    /// Cached against the file's identity, because the setup page polls status every two
+    /// seconds while a run is going and this sits behind that. Opening a PKCS#12 is not
+    /// free — the password goes through a key derivation on every open — and doing it
+    /// repeatedly to answer a question whose input only changes when the file does would
+    /// be work for nothing. A failed read is cached too, so an unreadable file is not
+    /// re-parsed on every poll either.
+    /// </remarks>
+    private static HashSet<string>? ReadNames(PluginConfiguration config)
+    {
+        var info = new FileInfo(config.CertificatePath);
+        if (!info.Exists)
+        {
+            return null;
+        }
+
+        var cached = _certificateNames;
+        if (cached is not null
+            && string.Equals(cached.Path, config.CertificatePath, StringComparison.Ordinal)
+            && cached.Written == info.LastWriteTimeUtc
+            && cached.Length == info.Length)
+        {
+            return cached.Names;
+        }
+
+        HashSet<string>? names;
+
+        try
+        {
+            using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+                config.CertificatePath, config.CertificatePassword);
+            names = new HashSet<string>(NamesOn(certificate), StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is CryptographicException or IOException
+            or UnauthorizedAccessException or ArgumentException)
+        {
+            names = null;
+        }
+
+        _certificateNames = new CertificateNames(
+            config.CertificatePath, info.LastWriteTimeUtc, info.Length, names);
+
+        return names;
+    }
+
+    /// <summary>
+    /// What was last read out of a certificate file, and the file identity it was read
+    /// from. A race here only costs a re-read, so it is deliberately not locked.
+    /// </summary>
+    private sealed record CertificateNames(
+        string Path, DateTime Written, long Length, HashSet<string>? Names);
+
+    /// <summary>
+    /// Reads the DNS names a certificate covers from its subject alternative name.
+    /// </summary>
+    private static IEnumerable<string> NamesOn(X509Certificate2 certificate)
+    {
+        var extension = certificate.Extensions["2.5.29.17"];
+        if (extension is null)
+        {
+            yield break;
+        }
+
+        // The collection is not guaranteed to hand back the typed extension, so it is
+        // rebuilt from the raw bytes when it does not.
+        var san = extension as X509SubjectAlternativeNameExtension
+            ?? new X509SubjectAlternativeNameExtension(extension.RawData, extension.Critical);
+
+        foreach (var name in san.EnumerateDnsNames())
+        {
+            yield return name;
+        }
     }
 
     private static string? Validate(PluginConfiguration config)
@@ -261,15 +387,22 @@ public sealed class AcmeService
             return "No domain configured.";
         }
 
-        if (!IsValidHostname(config.Domain))
+        // Every name on the certificate is validated the same way. One bad entry fails
+        // the whole order at the certificate authority, so it is worth naming the exact
+        // offender here rather than letting the CA answer with an identifier error.
+        foreach (var name in config.AllDomains())
         {
-            return "Domain is not a valid hostname — enter it as a bare name like "
-                + "media.example.com, with no scheme, port, or path.";
-        }
+            if (name.Contains('*', StringComparison.Ordinal))
+            {
+                return "Wildcard certificates are not supported \u2014 remove " + name
+                    + " and list each name in full instead.";
+            }
 
-        if (config.Domain.Contains('*', StringComparison.Ordinal))
-        {
-            return "Wildcard certificates are not supported.";
+            if (!IsValidHostname(name))
+            {
+                return name + " is not a valid hostname \u2014 enter each name in full, "
+                    + "like media.example.com, with no scheme, port, or path.";
+            }
         }
 
         if (string.IsNullOrWhiteSpace(config.AccountEmail))
@@ -364,6 +497,13 @@ public sealed class AcmeService
         var test = config.Clone();
         test.UseStaging = true;
         test.CertificatePath = config.CertificatePath + ".test";
+
+        // A rehearsal must not publish. The staging certificate is signed by a root no
+        // browser trusts, so letting it land on the PEM paths would hand a reverse proxy
+        // serving every other application a certificate that fails on every device the
+        // moment it reloaded. The rehearsal only needs to prove the challenge answers.
+        test.PemCertificatePath = string.Empty;
+        test.PemPrivateKeyPath = string.Empty;
         return test;
     }
 
@@ -470,7 +610,12 @@ public sealed class AcmeService
         var acme = await GetOrCreateAccountAsync(config, directory, acmeHttpClient, cancellationToken).ConfigureAwait(false);
 
         _state.Report(IssuancePhase.PublishingDns, "Creating the certificate order…");
-        var order = await acme.NewOrder(new[] { config.Domain }).ConfigureAwait(false);
+        // One order, every name. The certificate authority opens an authorization per
+        // name and the loop below answers each in turn; a single HTTP-01 listener can
+        // satisfy all of them, because every name resolves to this same host.
+        var domains = config.AllDomains();
+        _logger.LogInformation("Ordering a certificate for {Count} name(s)", domains.Count);
+        var order = await acme.NewOrder(domains).ConfigureAwait(false);
         var authorizations = await order.Authorizations().ConfigureAwait(false);
 
         var placedRecords = new List<string>();
@@ -511,7 +656,9 @@ public sealed class AcmeService
 
             _state.Report(IssuancePhase.Finalizing, "Downloading the certificate…");
             var privateKey = KeyFactory.NewKey(KeyAlgorithm.ES256);
-            var chain = await order.Generate(new CsrInfo { CommonName = config.Domain }, privateKey)
+            // The common name is the primary name; Certes adds every other identifier on
+            // the order to the request as a subject alternative name.
+            var chain = await order.Generate(new CsrInfo { CommonName = domains[0] }, privateKey)
                 .ConfigureAwait(false);
 
             // Assemble the PKCS#12 with .NET's own crypto from exactly the chain the CA
@@ -521,7 +668,9 @@ public sealed class AcmeService
             var pfx = BuildPfx(chain, privateKey, config.CertificatePassword);
 
             _state.Report(IssuancePhase.WritingCertificate, "Writing the certificate to disk…");
-            await WriteCertificateAsync(config.CertificatePath, pfx, cancellationToken).ConfigureAwait(false);
+            await WriteCertificateAsync(config.CertificatePath, pfx, secret: true, cancellationToken)
+                .ConfigureAwait(false);
+            await WritePemAsync(config, chain, privateKey, cancellationToken).ConfigureAwait(false);
 
             using var issued = X509CertificateLoader.LoadPkcs12(pfx, config.CertificatePassword);
             return issued.NotAfter.ToUniversalTime();
@@ -742,10 +891,90 @@ public sealed class AcmeService
     }
 
     /// <summary>
+    /// Writes the chain and key in PEM form for a reverse proxy to read, when paths for
+    /// them are configured.
+    /// </summary>
+    /// <remarks>
+    /// The certificate goes out as leaf first and then each issuer, which is the order
+    /// every proxy expects; a chain assembled the other way round is accepted by the
+    /// proxy at start and then rejected by clients, which is a miserable thing to
+    /// diagnose. Failing to write these must not fail an issuance that has already
+    /// succeeded \u2014 the certificate is on disk and valid \u2014 so a problem here is
+    /// reported and swallowed.
+    /// </remarks>
+    private async Task WritePemAsync(
+        PluginConfiguration config,
+        CertificateChain chain,
+        IKey privateKey,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(config.PemCertificatePath)
+            && string.IsNullOrWhiteSpace(config.PemPrivateKeyPath))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(config.PemCertificatePath))
+            {
+                var pem = new StringBuilder();
+                pem.Append(chain.Certificate.ToPem());
+
+                foreach (var issuer in chain.Issuers)
+                {
+                    pem.Append(issuer.ToPem());
+                }
+
+                await WriteCertificateAsync(
+                    config.PemCertificatePath,
+                    Encoding.ASCII.GetBytes(pem.ToString()),
+                    secret: false,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrWhiteSpace(config.PemPrivateKeyPath))
+            {
+                await WriteCertificateAsync(
+                    config.PemPrivateKeyPath,
+                    Encoding.ASCII.GetBytes(privateKey.ToPem()),
+                    secret: true,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            _logger.LogInformation("Wrote the certificate in PEM form for a reverse proxy");
+        }
+        catch (Exception ex)
+        {
+            // Deliberately unfiltered. The contract above is that a failure here cannot
+            // fail an issuance that already succeeded, and a narrower filter broke it: an
+            // escaping exception is recorded by the caller as a failed run with no
+            // expiry, which makes every later check believe a renewal is due and re-issue
+            // daily against the authority's rate limit — over a certificate that is
+            // on disk and perfectly valid.
+            _logger.LogError(
+                ex,
+                "The certificate was issued, but writing the PEM copy failed. A reverse "
+                + "proxy reading those files will keep serving the previous certificate.");
+        }
+    }
+
+    /// <summary>
     /// Writes the bundle to a temporary file, restricts it to the server account, then
     /// moves it into place — so a reader never observes a half-written certificate.
     /// </summary>
-    private static async Task WriteCertificateAsync(string path, byte[] pfx, CancellationToken cancellationToken)
+    /// <param name="path">Where the file should end up.</param>
+    /// <param name="content">The bytes to write.</param>
+    /// <param name="secret">
+    /// Whether the content carries a private key, and so must never be readable by
+    /// anyone but the server account.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    private static async Task WriteCertificateAsync(
+        string path,
+        byte[] content,
+        bool secret,
+        CancellationToken cancellationToken)
     {
         var parent = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(parent))
@@ -782,7 +1011,10 @@ public sealed class AcmeService
 
         if (!OperatingSystem.IsWindows())
         {
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            options.UnixCreateMode = secret
+                ? UnixFileMode.UserRead | UnixFileMode.UserWrite
+                : UnixFileMode.UserRead | UnixFileMode.UserWrite
+                    | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
         }
 
         try
@@ -790,13 +1022,29 @@ public sealed class AcmeService
             var stream = new FileStream(temp, options);
             await using (stream.ConfigureAwait(false))
             {
-                await stream.WriteAsync(pfx, cancellationToken).ConfigureAwait(false);
+                await stream.WriteAsync(content, cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            // UnixCreateMode is applied through open(2) and so is masked by the process
+            // umask. Jellyfin's images expose UMASK, and at 077 the chain a proxy is
+            // meant to read arrives at 0600 with nothing on screen to explain why. Only
+            // the public half is re-stated: the secret half is never widened, and a umask
+            // that made it tighter than asked for is a stricter answer, not a wrong one.
+            if (!secret && !OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    temp,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite
+                        | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
             }
 
             // Rename keeps the mode, and replaces the old bundle in one step, so a
             // reader never sees a partial certificate.
             File.Move(temp, path, overwrite: true);
+
+            // Whatever was remembered about the old file describes a file that is gone.
+            _certificateNames = null;
         }
         catch
         {

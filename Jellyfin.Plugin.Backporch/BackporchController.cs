@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Mime;
 using System.Net.Sockets;
 using System.Text.Json;
+using Backporch.Docker;
 using Jellyfin.Plugin.Backporch.Acme;
 using Jellyfin.Plugin.Backporch.Configuration;
 using Jellyfin.Plugin.Backporch.Dns;
@@ -121,6 +122,73 @@ public class BackporchController : ControllerBase
     }
 
     /// <summary>
+    /// Lists the other applications running on this machine that could be given a name
+    /// on the certificate. Read-only; changes nothing anywhere.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The applications found, and any reason discovery could not run.</returns>
+    /// <remarks>
+    /// Nothing here is acted on. It exists so the person setting this up is offered what
+    /// is actually running rather than having to remember each application's port, and
+    /// every entry arrives with the risk of publishing it already worked out.
+    /// </remarks>
+    [HttpGet("Discover")]
+    public async Task<ActionResult<BackporchDiscoveryDto>> Discover(CancellationToken cancellationToken)
+    {
+        var config = Plugin.Instance!.Configuration;
+        var endpoint = string.IsNullOrWhiteSpace(config.DockerEndpoint)
+            ? DockerApi.DefaultSocket
+            : config.DockerEndpoint;
+
+        var dto = new BackporchDiscoveryDto { Domain = config.Domain, Endpoint = endpoint };
+
+        try
+        {
+            using var docker = new DockerApi(endpoint);
+            var apps = await docker.DiscoverAsync(cancellationToken).ConfigureAwait(false);
+
+            dto.Apps = apps.Select(a => new BackporchAppDto
+            {
+                Container = a.Container,
+                Image = a.Image,
+                Port = a.Port,
+                AlternatePorts = a.AlternatePorts,
+                Label = a.SuggestedLabel,
+                Hostname = string.IsNullOrWhiteSpace(config.Domain)
+                    ? string.Empty
+                    : a.HostnameUnder(config.Domain),
+                Risk = a.Risk.ToString(),
+                RiskReason = a.RiskReason,
+
+                // The application asking the question is already reachable at the primary
+                // name, so offering it a second one under itself is noise at best and
+                // "jellyfin.jellyfin.example.com" at worst. The container-side port
+                // identifies it; the published port is whatever the compose file chose.
+                IsThisServer = a.ContainerPort == _appHost.HttpPort
+            }).ToList();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException
+            or UnauthorizedAccessException or SocketException or NotSupportedException
+            or TaskCanceledException or JsonException or FormatException)
+        {
+            // Not being able to see Docker is ordinary - there may be none, or no
+            // permission to its socket. It is not an error worth failing the page over,
+            // so say what happened and let the names be typed by hand.
+            //
+            // The last three are what a misconfigured endpoint actually throws, and
+            // leaving them out turned every one of them into a 500 with no explanation:
+            // a firewalled host times out (TaskCanceledException), something that is not
+            // Docker answers with something that is not JSON, and a half-typed address
+            // fails to parse into a URI before a request is ever made.
+            _logger.LogInformation(ex, "Could not list containers for discovery");
+            dto.Problem = "Could not read the container list from " + endpoint
+                + ". Add the names by hand, or point this at a Docker socket under Advanced.";
+        }
+
+        return Ok(dto);
+    }
+
+    /// <summary>
     /// Preflight for the setup page: detects the server's public address, checks what
     /// the configured domain currently resolves to, and (for Cloudflare) verifies the
     /// token can see the zone. Read-only; changes nothing anywhere.
@@ -179,8 +247,13 @@ public class BackporchController : ControllerBase
                 var addresses = await System.Net.Dns.GetHostAddressesAsync(
                     config.Domain, AddressFamily.InterNetwork, cancellationToken).ConfigureAwait(false);
                 dto.ResolvedAddresses = addresses.Select(a => a.ToString()).ToArray();
-                dto.DomainMatchesPublicIp = dto.PublicIp is not null
-                    && dto.ResolvedAddresses.Contains(dto.PublicIp, StringComparer.Ordinal);
+                // Left null, not false, when this server's own address could not be
+                // detected. The comparison is unknowable without it, and "false" is
+                // rendered as "not this server yet" \u2014 a verdict about the user's DNS
+                // drawn from our own failure to reach an address-echo service.
+                dto.DomainMatchesPublicIp = dto.PublicIp is null
+                    ? null
+                    : dto.ResolvedAddresses.Contains(dto.PublicIp, StringComparer.Ordinal);
             }
             catch (SocketException)
             {
@@ -354,4 +427,58 @@ public class BackporchCheckDto
 
     /// <summary>Gets or sets the Cloudflare error when the token check failed.</summary>
     public string? ZoneError { get; set; }
+}
+
+/// <summary>
+/// The applications discovery found running on this machine.
+/// </summary>
+public class BackporchDiscoveryDto
+{
+    /// <summary>Gets or sets the configured domain the names would sit under.</summary>
+    public string Domain { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the Docker endpoint that was read.</summary>
+    public string Endpoint { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the applications found, safest first.</summary>
+    public IReadOnlyList<BackporchAppDto> Apps { get; set; } = Array.Empty<BackporchAppDto>();
+
+    /// <summary>Gets or sets why discovery could not run, when it could not.</summary>
+    public string? Problem { get; set; }
+}
+
+/// <summary>
+/// One application that could be given a name on the certificate.
+/// </summary>
+public class BackporchAppDto
+{
+    /// <summary>Gets or sets the container name.</summary>
+    public string Container { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the image it runs.</summary>
+    public string Image { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the host port that serves it.</summary>
+    public int Port { get; set; }
+
+    /// <summary>Gets or sets the other published ports it could be served on.</summary>
+    public IReadOnlyList<int> AlternatePorts { get; set; } = Array.Empty<int>();
+
+    /// <summary>Gets or sets the suggested host label, such as <c>sonarr</c>.</summary>
+    public string Label { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the full name it would answer to, when a domain is set.</summary>
+    public string Hostname { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets how dangerous publishing it would be.</summary>
+    public string Risk { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets why, when it is not ordinary.</summary>
+    public string RiskReason { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets whether this is the server hosting this plugin, which the primary
+    /// name already covers.
+    /// </summary>
+    public bool IsThisServer { get; set; }
 }

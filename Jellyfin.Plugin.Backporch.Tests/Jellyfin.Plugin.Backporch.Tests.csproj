@@ -20,6 +20,12 @@
 
   <ItemGroup>
     <ProjectReference Include="../Jellyfin.Plugin.Backporch/Jellyfin.Plugin.Backporch.csproj" />
+    <ProjectReference Include="../Backporch.Docker/Backporch.Docker.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A real container listing captured from a running machine. -->
+    <None Include="fixtures/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

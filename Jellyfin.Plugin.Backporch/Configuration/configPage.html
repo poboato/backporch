@@ -22,6 +22,20 @@
                     font-size: 1.08em;
                     font-weight: 600;
                 }
+                #BackporchConfigPage .bp-app {
+                    display: flex; align-items: flex-start; gap: 0.75em;
+                    padding: 0.5em 0; border-bottom: 1px solid rgba(255,255,255,0.08);
+                }
+                #BackporchConfigPage .bp-app:last-child { border-bottom: none; }
+                #BackporchConfigPage .bp-app-main { flex: 1 1 auto; min-width: 0; }
+                #BackporchConfigPage .bp-app-name { font-weight: 600; }
+                #BackporchConfigPage .bp-app-meta { opacity: 0.7; font-size: 0.88em; }
+                #BackporchConfigPage .bp-badge {
+                    display: inline-block; padding: 0.1em 0.5em; border-radius: 0.6em;
+                    font-size: 0.78em; margin-left: 0.4em; vertical-align: middle;
+                }
+                #BackporchConfigPage .bp-badge-warn { background: #7a5200; color: #fff; }
+                #BackporchConfigPage .bp-app-why { color: #e0a800; font-size: 0.88em; }
                 #BackporchConfigPage .bp-dot {
                     flex: none;
                     width: 1.7em;
@@ -119,6 +133,28 @@
                             The exact address you will type to reach this server. A subdomain of a
                             domain you own works best, e.g. <code>jellyfin.example.com</code>.
                         </div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpExtraDomains">Other addresses on the same certificate (optional)</label>
+                        <textarea is="emby-textarea" id="bpExtraDomains" rows="3" class="emby-textarea" placeholder="home.example.com&#10;sonarr.example.com"></textarea>
+                        <div class="fieldDescription">
+                            One per line. One certificate can cover several addresses, so a reverse
+                            proxy in front of your other applications can use the same certificate
+                            instead of needing one each. <strong>Every address you list must already
+                            point at this server</strong> &mdash; each is checked separately, and one
+                            that does not resolve fails the whole request.
+                        </div>
+                    </div>
+                    <div class="inputContainer" id="bpDiscoverBox">
+                        <button is="emby-button" type="button" id="bpDiscover" class="raised emby-button">
+                            <span>Find apps running on this machine</span>
+                        </button>
+                        <div class="fieldDescription" style="margin-top:0.4em;">
+                            Reads the list of running containers and offers each one a name.
+                            Nothing is published by ticking a box &mdash; it only adds the name
+                            to the certificate above.
+                        </div>
+                        <div id="bpDiscoverResult" style="margin-top:0.75em;"></div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="bpEmail">Email</label>
@@ -285,6 +321,25 @@
                         <label class="inputLabel inputLabelUnfocused" for="bpCertPathInput">Certificate file path</label>
                         <input is="emby-input" type="text" id="bpCertPathInput" autocomplete="off" />
                         <div class="fieldDescription">Leave empty to use the default inside Jellyfin's data directory.</div>
+                    </div>
+                    <h3 class="checkboxListLabel" style="margin-top:1.5em;">Copies for a reverse proxy</h3>
+                    <div class="fieldDescription" style="margin-bottom:0.6em;">
+                        Jellyfin reads the certificate above, but nginx, Apache, HAProxy and Caddy
+                        all want PEM instead. Fill these in to write a copy in that form on every
+                        renewal, so a proxy serving your other applications stays current too.
+                        Leave empty to write nothing.
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpPemCert">Certificate chain (PEM) path</label>
+                        <input is="emby-input" type="text" id="bpPemCert" autocomplete="off" placeholder="/etc/ssl/backporch/fullchain.pem" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="bpPemKey">Private key (PEM) path</label>
+                        <input is="emby-input" type="text" id="bpPemKey" autocomplete="off" placeholder="/etc/ssl/backporch/privkey.pem" />
+                        <div class="fieldDescription">
+                            Written readable only by the account running this server. Give the proxy
+                            access through the containing directory rather than widening this file.
+                        </div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="bpRenewDays">Renew this many days before expiry</label>
@@ -489,6 +544,13 @@
                         line.textContent = '';
                     } else if (check.DomainMatchesPublicIp) {
                         line.innerHTML = '<span class="bp-ok">✓ ' + esc(cfg.Domain) + ' points at this server.</span>';
+                    } else if (check.DomainMatchesPublicIp === null && check.ResolvedAddresses && check.ResolvedAddresses.length) {
+                        // We could not detect this server's own address, so whether the
+                        // domain points here is unknown. Saying otherwise would blame the
+                        // user's DNS for our own failure to reach the address service.
+                        line.innerHTML = '<span class="bp-warn">' + esc(cfg.Domain) + ' resolves to '
+                            + esc(check.ResolvedAddresses.join(', ')) + ", but this server's own public "
+                            + 'address could not be detected, so this could not be checked.</span>';
                     } else if (check.ResolvedAddresses && check.ResolvedAddresses.length) {
                         line.innerHTML = '<span class="bp-warn">The domain currently resolves to '
                             + esc(check.ResolvedAddresses.join(', ')) + ' — not this server yet.</span>';
@@ -650,9 +712,125 @@
                 }).then(function (c) { check = c; render(); return c; }, function () { check = null; });
             }
 
+            function currentNames() {
+                return q('#bpExtraDomains').value
+                    .split('\n')
+                    .map(function (n) { return n.trim(); })
+                    .filter(function (n) { return n.length > 0; });
+            }
+
+            function setNames(names) {
+                var seen = {};
+                var unique = [];
+                names.forEach(function (n) {
+                    var key = n.toLowerCase();
+                    if (n.length && !seen[key]) { seen[key] = true; unique.push(n); }
+                });
+                q('#bpExtraDomains').value = unique.join('\n');
+            }
+
+            function escapeHtml(text) {
+                return String(text).replace(/[&<>"']/g, function (c) {
+                    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+                });
+            }
+
+            // Ticking adds the name, unticking removes exactly that one. Names typed by
+            // hand are never disturbed, because the list is rebuilt from what is in the
+            // box rather than from the discovered set.
+            function toggleName(hostname, on) {
+                var names = currentNames();
+                var lower = hostname.toLowerCase();
+                names = names.filter(function (n) { return n.toLowerCase() !== lower; });
+                if (on) { names.push(hostname); }
+                setNames(names);
+            }
+
+            function renderDiscovery(result) {
+                var box = q('#bpDiscoverResult');
+
+                if (result.Problem) {
+                    box.innerHTML = '<div class="fieldDescription" style="color:#e0a800;">'
+                        + escapeHtml(result.Problem) + '</div>';
+                    return;
+                }
+
+                if (!result.Apps || !result.Apps.length) {
+                    box.innerHTML = '<div class="fieldDescription">Nothing else is running that could be given a name.</div>';
+                    return;
+                }
+
+                var domain = q('#bpDomain').value.trim();
+                if (!domain) {
+                    box.innerHTML = '<div class="fieldDescription" style="color:#e0a800;">'
+                        + 'Enter your domain above first, so each app can be given a name under it.</div>';
+                    return;
+                }
+
+                var already = {};
+                currentNames().forEach(function (n) { already[n.toLowerCase()] = true; });
+
+                var html = '';
+                result.Apps.forEach(function (app, i) {
+                    // This server is already the primary name. Offering it a second name
+                    // under itself would read as jellyfin.jellyfin.example.com.
+                    if (app.IsThisServer) {
+                        html += '<div class="bp-app"><div class="bp-app-main">'
+                            + '<span class="bp-app-name">' + escapeHtml(domain) + '</span>'
+                            + '<div class="bp-app-meta">' + escapeHtml(app.Container)
+                            + ' &middot; this server, already covered by your address above</div>'
+                            + '</div></div>';
+                        return;
+                    }
+
+                    var host = app.Label + '.' + domain;
+                    var checked = already[host.toLowerCase()] ? ' checked' : '';
+                    var risky = app.Risk === 'Sensitive';
+                    var ports = app.Port
+                        + (app.AlternatePorts && app.AlternatePorts.length
+                            ? ' (also ' + app.AlternatePorts.join(', ') + ')' : '');
+
+                    html += '<div class="bp-app">'
+                        + '<input type="checkbox" class="bp-app-tick" id="bpApp' + i + '"'
+                        + ' data-host="' + escapeHtml(host) + '"' + checked + ' />'
+                        + '<div class="bp-app-main">'
+                        + '<label class="bp-app-name" for="bpApp' + i + '">' + escapeHtml(host) + '</label>'
+                        + (risky ? '<span class="bp-badge bp-badge-warn">think twice</span>' : '')
+                        + '<div class="bp-app-meta">' + escapeHtml(app.Container)
+                        + ' &middot; port ' + escapeHtml(ports) + '</div>'
+                        + (risky ? '<div class="bp-app-why">' + escapeHtml(app.RiskReason) + '</div>' : '')
+                        + '</div></div>';
+                });
+
+                box.innerHTML = html;
+
+                Array.prototype.forEach.call(box.querySelectorAll('.bp-app-tick'), function (tick) {
+                    tick.addEventListener('change', function () {
+                        toggleName(tick.getAttribute('data-host'), tick.checked);
+                    });
+                });
+            }
+
+            function runDiscovery() {
+                var box = q('#bpDiscoverResult');
+                box.innerHTML = '<div class="fieldDescription">Looking\u2026</div>';
+                return ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('Backporch/Discover'),
+                    dataType: 'json'
+                }).then(renderDiscovery, function () {
+                    box.innerHTML = '<div class="fieldDescription" style="color:#e0a800;">'
+                        + 'Could not reach the server to ask what is running.</div>';
+                });
+            }
+
             function readForm() {
                 var proof = proofValue();
                 cfg.Domain = q('#bpDomain').value.trim();
+                cfg.ExtraDomains = q('#bpExtraDomains').value
+                    .split('\n')
+                    .map(function (n) { return n.trim(); })
+                    .filter(function (n) { return n.length > 0; });
                 cfg.AccountEmail = q('#bpEmail').value.trim();
                 cfg.Challenge = proof === 'Http' ? 'Http' : 'Dns';
                 if (proof !== 'Http') { cfg.DnsProvider = proof; }
@@ -662,6 +840,8 @@
                 // the box happened to show, so it only counts once the user moves it.
                 if (stagingTouched) { cfg.UseStaging = q('#bpUseStaging').checked; }
                 cfg.CertificatePath = q('#bpCertPathInput').value.trim();
+                cfg.PemCertificatePath = q('#bpPemCert').value.trim();
+                cfg.PemPrivateKeyPath = q('#bpPemKey').value.trim();
                 cfg.RenewDaysBeforeExpiry = parseInt(q('#bpRenewDays').value, 10) || 30;
                 cfg.DnsPropagationSeconds = parseInt(q('#bpPropagation').value, 10) || 60;
                 cfg.DirectoryUrl = q('#bpDirectoryUrl').value.trim();
@@ -693,12 +873,15 @@
 
             function fillForm() {
                 q('#bpDomain').value = cfg.Domain || '';
+                q('#bpExtraDomains').value = (cfg.ExtraDomains || []).join('\n');
                 q('#bpEmail').value = cfg.AccountEmail || '';
                 q('#bpProvider').value = proofFromConfig(cfg);
                 q('#bpToken').value = cfg.DnsApiToken || '';
                 q('#bpUseStaging').checked = !!cfg.UseStaging;
                 stagingTouched = false;
                 q('#bpCertPathInput').value = cfg.CertificatePath || '';
+                q('#bpPemCert').value = cfg.PemCertificatePath || '';
+                q('#bpPemKey').value = cfg.PemPrivateKeyPath || '';
                 q('#bpRenewDays').value = cfg.RenewDaysBeforeExpiry || 30;
                 q('#bpPropagation').value = cfg.DnsPropagationSeconds || 60;
                 q('#bpDirectoryUrl').value = cfg.DirectoryUrl || '';
@@ -784,6 +967,8 @@
                     dataType: 'json'
                 }).then(fetchStatus, fetchStatus);
             });
+
+            q('#bpDiscover').addEventListener('click', function () { runDiscovery(); });
 
             q('#bpSaveAdvanced').addEventListener('click', function () {
                 saveConfig().then(function (result) {

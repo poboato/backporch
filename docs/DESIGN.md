@@ -124,10 +124,13 @@ third-party descriptions of it contradict each other. A silently-wrong prefill
 is worse than a manual step, so the page links the official token page and
 names the built-in **"Edit zone DNS"** template instead.
 
-### Packaging ships exactly three assemblies
-`package.sh` ships the plugin DLL + Certes + BouncyCastle, nothing else.
-`dotnet publish` output includes Jellyfin's own assemblies, which must never
-ship inside a plugin (ABI clashes at load).
+### Packaging ships exactly five assemblies
+`package.sh` ships the plugin DLL + Backporch.Docker + Certes + BouncyCastle +
+Newtonsoft.Json, nothing else. `dotnet publish` output includes Jellyfin's own
+assemblies, which must never ship inside a plugin (ABI clashes at load). The count
+is in the heading deliberately: it is a number that must be changed on purpose, and
+a plugin that silently gained a dependency is exactly what this rule exists to
+catch.
 
 ### Target framework is net9.0
 Jellyfin 10.11.x runs on net9 — jellyfin *master* is net10, and building
@@ -251,6 +254,105 @@ mistake lasts. `includeSubDomains` and `preload` are never sent — both make
 promises about names this plugin neither owns nor can verify.
 **Cost of change:** turning it off is safe; *shortening* it does not reach
 browsers that already cached the longer value.
+
+### Many names on one certificate, and a PEM copy for whatever is in front
+A certificate can carry many names, and a self-hosted machine almost never runs
+one application. Ordering `jellyfin.example.com`, `home.example.com` and
+`sonarr.example.com` together means one issuance, one renewal, and one thing to
+get wrong instead of three. The certificate authority opens an authorization per
+name, but they can all be answered by the single port-80 listener, because every
+name resolves to the same host — so the multi-name case costs nothing extra at
+the front door.
+
+Wildcards stay refused. They would cover the same ground, but only through
+DNS-01, which means a credential on disk; the explicit list needs none. The
+refusal now names the offending entry, because "domain is not a valid hostname"
+is unhelpful when the domain is fine and the fourth line of the list is not.
+
+Names are de-duplicated case-insensitively before the order is placed: a
+repeated identifier makes the CA reject the *whole* order, so a name typed twice
+must never reach it. The first name stays the common name, and the order of the
+rest is preserved.
+
+The output format was the other half. A PKCS#12 is what Kestrel reads and what
+almost nothing else does — nginx, Apache, HAProxy and Caddy all want PEM. So the
+PEM pair is written alongside it when paths are configured: the chain
+world-readable (it is public, and the proxy runs as another user), the key
+`0600` from creation via the same routine that writes the PKCS#12, so the
+"created restricted, never restricted afterwards" property extends to it for
+free.
+
+Two failure modes were designed out rather than documented around. The guided
+rehearsal issues from *staging*, whose root no browser trusts — it clones the
+configuration and blanks the PEM paths, because publishing there would hand a
+proxy serving every other application a certificate that fails on every device
+at its next reload. And a plain-HTTP request now redirects to the name it asked
+for rather than always to the primary, matched against the configured list so
+it stays an allow list and not an open redirect; without that, a request for one
+application would land on another application's address.
+
+**Not done here, deliberately:** reloading the proxy. Nothing configured through
+a web form should be able to run a command as the account hosting the media
+server. A systemd path unit watching the PEM file is simpler and a far smaller
+thing to get wrong.
+**Cost of change:** the name list and PEM paths are additive — an existing
+configuration with neither behaves exactly as before.
+
+### Renewal is decided by coverage as well as by expiry
+Expiry was the only question worth asking while a certificate carried one name that
+could never change. Once names can be added after issuance it stops being enough:
+the certificate on disk can be valid for another two months and still not cover
+what was asked for. So renewal now also asks whether every configured name is on
+the certificate, read from the file itself rather than remembered alongside it —
+that stays right for a file this plugin did not write, and across an upgrade from a
+version that recorded nothing.
+
+A file that cannot be read is deliberately *not* treated as covering nothing. That
+reading would be the more suspicious one, but it would also re-issue on every check
+for as long as the file stayed unreadable, spending the authority's rate limit over
+something we cannot even open. Expiry has the last word when the names are
+unknowable.
+
+The names are memoised against the file's identity, because the setup page polls
+status every two seconds during a run and opening a PKCS#12 puts the password
+through a key derivation each time.
+**Cost of change:** dropping the coverage check returns the previous behaviour
+exactly, at the price of a name that is configured, displayed as covered, and
+serving nothing.
+
+### Discovery offers what is running, but not everything that is running
+Naming every application by hand means remembering what is up and which port each
+answers on, and that is exactly the sort of task that gets done once, badly. Reading
+the container list removes it. But a straight dump of running containers would be a
+worse product than no list at all, because the reader assumes anything offered is
+reasonable to publish.
+
+So discovery is a judgement, not a listing. A read-only Docker socket proxy is
+filtered out entirely — reachable from the internet it is the whole machine, and no
+tick box should be able to select it. Container managers, download clients and host
+metrics pages are offered but flagged with the reason in plain words, and sorted
+last so a quick skim does not meet them first. Known non-HTTP ports are never
+chosen: BitTorrent behind an HTTP proxy connects and then makes no sense, which is
+among the worst things to be asked to diagnose. A container with several web ports
+keeps the rest as alternatives rather than having one guessed silently.
+
+Two details came out of running it against a real machine rather than a fixture.
+The plugin's own server appeared in its own list, suggesting
+`jellyfin.jellyfin.example.com`; it is recognised now by the *container-side* port,
+because the published port is whatever the compose file chose and says nothing about
+what the software is. And stripping suffixes to make names read better turned
+`media-server` into `media`, so only `-ui` and `-app` are dropped — the plainly
+artefactual ones — while `-web` and `-server` stay.
+
+Names are also de-duplicated, which matters more than it looks: two applications
+reducing to one label would be silently collapsed on the certificate, leaving one of
+them unreachable behind a front door that appears to have worked.
+
+The component has no Jellyfin reference at all. Discovery is equally useful to a
+standalone front door, and keeping the dependency out is what allows one
+implementation instead of two.
+**Cost of change:** additive. With no Docker reachable the page says so and names
+are typed by hand, exactly as before.
 
 ## Testing strategy, and what it taught
 
