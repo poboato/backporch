@@ -13,16 +13,23 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: |
+            9.0.x
+            10.0.x
 
-      - name: Build
+      - name: Build (Jellyfin 12)
         run: dotnet build Jellyfin.Plugin.Backporch/Jellyfin.Plugin.Backporch.csproj -c Release
+
+      - name: Build (Jellyfin 10.11)
+        run: dotnet build Jellyfin.Plugin.Backporch/Jellyfin.Plugin.Backporch.csproj -c Release -p:JellyfinAbi=10.11
 
       - name: Unit tests
         run: dotnet test Jellyfin.Plugin.Backporch.Tests/Jellyfin.Plugin.Backporch.Tests.csproj -c Release --filter "Category!=Integration"
 
       - name: Package
-        run: DOTNET=dotnet ./package.sh
+        run: |
+          DOTNET=dotnet ./package.sh
+          DOTNET=dotnet JELLYFIN_ABI=10.11 ./package.sh
 
       - uses: actions/upload-artifact@v4
         with:
@@ -53,7 +60,9 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: |
+            9.0.x
+            10.0.x
 
       # Host networking so Pebble's HTTP-01 validation can reach the test's challenge
       # responder at 127.0.0.1:5002 (challtestsrv's own http01 server is disabled to

@@ -4,8 +4,8 @@
 name: "Backporch"
 guid: "ec59d7bc-0644-4bfe-a924-b6ec7b88c1fb"
 version: "0.1.0.0"
-targetAbi: "10.11.0.0"
-framework: "net9.0"
+targetAbi: "12.2.0.0"
+framework: "net10.0"
 owner: "poboato"
 overview: "Automatic trusted TLS certificates for a self-hosted server."
 description: >

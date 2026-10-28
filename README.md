@@ -174,7 +174,10 @@ flag, and it is the strongest argument for eventually replacing Certes.
 
 ## Requirements
 
-- Jellyfin **10.11.x** (built and tested against 10.11.11).
+- Jellyfin **12.2 or later** (built against `Jellyfin.Controller` 12.2.0 on
+  .NET 10, load-tested in a disposable `jellyfin/jellyfin:12.2` container).
+  For a server still on **10.11.x**, build with `JELLYFIN_ABI=10.11 ./package.sh`
+  (net9.0, `Jellyfin.Controller` 10.11.11). The two zips are not interchangeable.
 - A domain you own. Any DNS host works: the default HTTP-01 proof only needs
   the domain's A record pointing at you plus a port-80 forward; DNS-01 is
   automatic with Cloudflare (the provider interface is pluggable) or manual

@@ -13,10 +13,20 @@ NAME="backporch"
 OUT="dist"
 STAGE="$OUT/stage"
 
-rm -rf "$OUT"
+# JELLYFIN_ABI picks the server line: 12 (default) or 10.11. The zips are not
+# interchangeable -- Jellyfin 12 runs on .NET 10 and needs the 12 build.
+JELLYFIN_ABI="${JELLYFIN_ABI:-12}"
+case "$JELLYFIN_ABI" in
+    12)    SUFFIX="" ;;
+    10.11) SUFFIX="_jellyfin-10.11" ;;
+    *)     echo "JELLYFIN_ABI must be 12 or 10.11, not '$JELLYFIN_ABI'" >&2; exit 2 ;;
+esac
+
+rm -rf "$OUT/publish" "$STAGE"
 mkdir -p "$STAGE"
 
-"$DOTNET" publish Jellyfin.Plugin.Backporch/Jellyfin.Plugin.Backporch.csproj -c Release -o "$OUT/publish"
+"$DOTNET" publish Jellyfin.Plugin.Backporch/Jellyfin.Plugin.Backporch.csproj -c Release \
+    -p:JellyfinAbi="$JELLYFIN_ABI" -o "$OUT/publish"
 
 # Certes depends on Newtonsoft.Json, so it ships too. Jellyfin happens to carry its
 # own copy today, but relying on that would make the plugin break on any server
@@ -27,7 +37,9 @@ cp "$OUT/publish/Jellyfin.Plugin.Backporch.dll" \
    "$OUT/publish/Newtonsoft.Json.dll" \
    "$STAGE/"
 
-(cd "$STAGE" && zip -q "../${NAME}_${VERSION}.zip" ./*)
+ZIP="${NAME}_${VERSION}${SUFFIX}.zip"
+rm -f "$OUT/$ZIP"
+(cd "$STAGE" && zip -q "../$ZIP" ./*)
 
-md5sum "$OUT/${NAME}_${VERSION}.zip"
-echo "Wrote $OUT/${NAME}_${VERSION}.zip"
+md5sum "$OUT/$ZIP"
+echo "Wrote $OUT/$ZIP (Jellyfin $JELLYFIN_ABI)"
