@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <JellyfinAbi Condition="'$(JellyfinAbi)' == ''">12</JellyfinAbi>
+    <TargetFramework Condition="'$(JellyfinAbi)' == '12'">net10.0</TargetFramework>
+    <TargetFramework Condition="'$(JellyfinAbi)' == '10.11'">net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>

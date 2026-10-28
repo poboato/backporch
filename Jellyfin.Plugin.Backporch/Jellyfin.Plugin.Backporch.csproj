@@ -1,7 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Which Jellyfin server line to build for. 12 is the default; 10.11 is kept buildable
+       (`-p:JellyfinAbi=10.11`). The two builds are not interchangeable: Jellyfin 12 runs on
+       .NET 10 and loads only plugins built against its own assemblies. -->
   <PropertyGroup>
+    <JellyfinAbi Condition="'$(JellyfinAbi)' == ''">12</JellyfinAbi>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(JellyfinAbi)' == '12'">
+    <TargetFramework>net10.0</TargetFramework>
+    <JellyfinPackageVersion>12.2.0</JellyfinPackageVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(JellyfinAbi)' == '10.11'">
     <TargetFramework>net9.0</TargetFramework>
+    <JellyfinPackageVersion>10.11.11</JellyfinPackageVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
     <FileVersion>0.1.0.0</FileVersion>
     <Version>0.1.0</Version>
@@ -9,6 +25,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <RootNamespace>Jellyfin.Plugin.Backporch</RootNamespace>
+    <!-- A Release build otherwise embeds the absolute path of its .pdb, which leaks the
+         building user's home directory into every published artifact. -->
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <Deterministic>true</Deterministic>
+    <DeterministicSourcePaths>true</DeterministicSourcePaths>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,7 +38,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" />
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinPackageVersion)" />
     <PackageReference Include="Certes" Version="3.0.4" />
   </ItemGroup>
 

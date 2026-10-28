@@ -129,10 +129,17 @@ names the built-in **"Edit zone DNS"** template instead.
 `dotnet publish` output includes Jellyfin's own assemblies, which must never
 ship inside a plugin (ABI clashes at load).
 
-### Target framework is net9.0
-Jellyfin 10.11.x runs on net9 — jellyfin *master* is net10, and building
-against it produces a plugin the released server cannot load. Local test runs
-on a .NET 10 SDK need `DOTNET_ROLL_FORWARD=Major`.
+### Target framework follows the server: net10.0 for 12, net9.0 for 10.11
+Jellyfin 12 runs on .NET 10 and Jellyfin 10.11.x on .NET 9; a plugin must be
+built against the server line it is loaded into. The default build targets 12
+(`Jellyfin.Controller` 12.2.0, net10.0). `-p:JellyfinAbi=10.11` (or
+`JELLYFIN_ABI=10.11 ./package.sh`) still produces the net9.0 build for an
+un-upgraded server. Running the 10.11 tests on a machine with only the .NET 10
+runtime needs `DOTNET_ROLL_FORWARD=Major`.
+
+The package carries no `meta.json`, so Jellyfin synthesises one whose
+`targetAbi` is the running server's own version; `build.yaml`'s `targetAbi`
+(12.2.0.0) is what a plugin repository would advertise.
 
 ### The plugin GUID is `ec59d7bc-0644-4bfe-a924-b6ec7b88c1fb`
 Never change it — Jellyfin identifies the plugin (and its stored config) by
